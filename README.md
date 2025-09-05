@@ -4,6 +4,8 @@ Overview
 
 Jingleplayer is an application for playing audio jingles (MP3, WAV) with a user-friendly graphical user interface (GUI). The software is based on Python, uses Pygame for audio playback and Tkinter for the user interface.
 
+Updated with separate GUI and logic
+
 Functions
 
 Link any audio files (*.mp3, *.wav) to buttons
