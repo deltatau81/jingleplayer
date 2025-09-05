@@ -70,6 +70,6 @@ This project is licensed under the MIT license.
 
 Author
 
-Developed by Young Crashers.
+Developed by Young Crashers Chemnitz.
 
  
