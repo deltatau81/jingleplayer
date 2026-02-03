@@ -15,6 +15,7 @@ Jingleplayer ist eine Audio-Anwendung zum Abspielen von Jingles (Audiodateien) �
 ### Button bedienen
 - **Linksklick**: Spielt den zugeordneten Jingle ab oder stoppt ihn, wenn bereits abspielend.
 - **Rechtsklick**: Öffnet ein Einstellungs-Popup zum Bearbeiten von Text, Farbe und Dateipfad.
+- **Volume-Slider**: Jeder Button hat einen eingebauten Lautstärke-Slider (-10 dB bis +10 dB), um die Lautstärke pro Button individuell anzupassen. Änderungen werden automatisch gespeichert.
 
 ### Lautstärke-Slider
 - Oben rechts im Fenster: Regelt die Wiedergabelautstärke (0-100%).
@@ -80,7 +81,7 @@ Jingleplayer ist eine Audio-Anwendung zum Abspielen von Jingles (Audiodateien) �
 
 ### Einstellungen
 - **Speicherort**: `C:\Users\<Benutzer>\.jingleplayer\jingleplayer_settings.json`
-- **Inhalt**: JSON-Format mit Button-Texten, Farben, Dateipfaden, Anzahl Buttons pro Reihe, Lautstärke, Fadeout-Dauer, Button-Höhe und zuletzt verwendetem Ordner.
+- **Inhalt**: JSON-Format mit Button-Texten, Farben, Dateipfaden, Anzahl Buttons pro Reihe, Lautstärke, Fadeout-Dauer, Button-Höhe, pro-Button-Volumes und zuletzt verwendetem Ordner.
 
 ### Unterstützte Audioformate
 - `.mp3` (MPEG-3 Audio)
@@ -121,6 +122,7 @@ Jingleplayer ist eine Audio-Anwendung zum Abspielen von Jingles (Audiodateien) �
 3. **Bulk-Edits**: Um mehrere Buttons zu bearbeiten, öffnen Sie sie nacheinander mit Rechtsklick.
 4. **Layout anpassen**: Über "Buttons pro Reihe" können Sie die Anordnung jederzeit ändern.
 5. **Backup**: Die `jingleplayer_settings.json` regelmäßig sichern, um Einstellungen nicht zu verlieren.
+6. **Individuelle Lautstärke**: Verwenden Sie die Volume-Slider auf jedem Button, um die Lautstärke pro Jingle anzupassen (z. B. für leisere Jingles).
 
 ---
 
@@ -129,6 +131,6 @@ Für Fragen oder Probleme: Konsultieren Sie die Anwendungs-Logs oder überprüfe
 
 ---
 
-**Version**: 1.0  
-**Datum**: November 2025  
+**Version**: 1.1  
+**Datum**: Februar 2026  
 **Anwendung**: Jingleplayer
