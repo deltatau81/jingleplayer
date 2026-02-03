@@ -1,5 +1,8 @@
 import tkinter as tk
 from tkinter import simpledialog, messagebox, colorchooser, filedialog
+import os
+import shutil
+from pathlib import Path
 
 import jingleplayer_logic  # Importiert die Logik-Datei!
 
@@ -118,16 +121,11 @@ def main_gui():
 
 def update_indicator_gui(index, playing):
     indicator = indicators[index - 1]
+    indicator.config(width=12, height=12)
     indicator.delete("all")
-    if playing:
-        # Draw black border for play symbol (doubled in size)
-        indicator.create_polygon(9, 9, 31, 20, 9, 31, outline="black", fill="")
-        # Draw red play symbol (doubled in size)
-        indicator.create_polygon(10, 10, 30, 20, 10, 30, fill="red")
-    else:
-        # Draw green pause symbol (doubled in size)
-        indicator.create_rectangle(10, 10, 16, 30, fill="green")
-        indicator.create_rectangle(20, 10, 26, 30, fill="green")
+    # Draw a filled circle: red if playing, green if not
+    color = "red" if playing else "green"
+    indicator.create_oval(2, 2, 10, 10, fill=color, outline="black", width=1)
 
 def open_settings_menu_gui():
     open_settings_menu_gui.window = None  # Initialisierung außerhalb der Funktion
@@ -140,75 +138,61 @@ def open_settings_menu_gui():
     open_settings_menu_gui.window = settings_window
     settings_window.title("Einstellungen")
 
-    create_button_edit_section_gui(settings_window)  # Auslagerung in separate Funktion
     create_fadeout_duration_section_gui(settings_window)  # Auslagerung in separate Funktion
-    create_button_height_section_gui(settings_window)  # Auslagerung in separate Funktion
     create_buttons_per_row_section_gui(settings_window)  # Auslagerung in separate Funktion
+    create_default_folder_section_gui(settings_window)  # Auslagerung in separate Funktion
+    create_settings_file_location_section_gui(settings_window)  # Auslagerung in separate Funktion
 
     # Hinweis-Label
     tk.Label(settings_window, text="Bei Änderungen des Layouts muss die Anwendung neu gestartet werden.", font=("Arial", 10), fg="red").pack(pady=10)
 
+    # Button-Frame für Hilfe und Schließen
+    button_frame = tk.Frame(settings_window)
+    button_frame.pack(pady=10)
+    
+    help_button = tk.Button(button_frame, text="❓ Hilfe", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS), command=show_help_gui)
+    help_button.pack(side="left", padx=5)
+
     # Schließen-Button
-    close_button = tk.Button(settings_window, text="Schließen", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS), command=settings_window.destroy)
-    close_button.pack(pady=10)
-
-def create_button_edit_section_gui(settings_window):
-    """Erstellt den Bereich für die Button-Bearbeitung im Einstellungsmenü."""
-    dropdown_frame = tk.Frame(settings_window)
-    dropdown_frame.pack(fill="x", padx=20, pady=5)
-    tk.Label(dropdown_frame, text="Button bearbeiten:", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
-    button_texts_data = jingleplayer_logic.get_button_texts_data()
-    button_var = tk.StringVar(dropdown_frame)
-    # Fix: Avoid IndexError if list is empty
-    if button_texts_data:
-        button_var.set(button_texts_data[0])  # Default value
-        button_menu = tk.OptionMenu(dropdown_frame, button_var, *button_texts_data)
-    else:
-        button_var.set("Kein Button vorhanden")
-        button_menu = tk.OptionMenu(dropdown_frame, button_var, "Kein Button vorhanden")
-        button_menu.config(state="disabled")
-    button_menu.pack(side="left", padx=5)
-
-    def edit_selected_button_gui():
-        if not button_texts_data:
-            return
-        index = button_texts_data.index(button_var.get()) + 1
-        change_button_text_gui(settings_window, index)  # Übergabe settings_window für messagebox
-        change_button_color_gui(settings_window, index)  # Übergabe settings_window für messagebox
-        assign_jingle_file_gui(settings_window, index)  # Übergabe settings_window für messagebox
-
-    tk.Button(dropdown_frame, text="Bearbeiten", font=("Arial", 10), command=edit_selected_button_gui, state="normal" if button_texts_data else "disabled").pack(side="left", padx=5)
+    close_button = tk.Button(button_frame, text="Schließen", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS), command=settings_window.destroy)
+    close_button.pack(side="left", padx=5)
 
 def create_fadeout_duration_section_gui(settings_window):
-    """Erstellt den Bereich für die Fadeout-Dauer-Einstellung im Einstellungsmenü."""
-    fadeout_frame = tk.Frame(settings_window)
-    fadeout_frame.pack(fill="x", padx=20, pady=5)
-    tk.Label(fadeout_frame, text="Fadeout-Dauer (ms):", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
+    """Erstellt den Bereich für die Fadeout-Dauer und Button-Höhe im Einstellungsmenü."""
+    settings_frame = tk.Frame(settings_window)
+    settings_frame.pack(fill="x", padx=20, pady=5)
+    
+    # Fadeout-Dauer
+    tk.Label(settings_frame, text="Fadeout-Dauer (ms):", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
     fadeout_duration_data = jingleplayer_logic.get_fadeout_duration_data()
-    fadeout_entry = tk.Entry(fadeout_frame, width=5)
+    fadeout_entry = tk.Entry(settings_frame, width=5)
     fadeout_entry.insert(0, str(fadeout_duration_data))
     fadeout_entry.pack(side="left", padx=5)
-    tk.Button(fadeout_frame, text="Aktualisieren", font=("Arial", 10), command=lambda: update_fadeout_duration_gui(fadeout_entry)).pack(side="left", padx=5)
-
-def create_button_height_section_gui(settings_window):
-    """Erstellt den Bereich für die Button-Höhen-Einstellung im Einstellungsmenü."""
-    button_height_frame = tk.Frame(settings_window)
-    button_height_frame.pack(fill="x", padx=20, pady=5)
-    tk.Label(button_height_frame, text="Button-Höhe:", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
+    tk.Button(settings_frame, text="Aktualisieren", font=("Arial", 10), command=lambda: update_fadeout_duration_gui(fadeout_entry)).pack(side="left", padx=5)
+    
+    # Separator
+    tk.Label(settings_frame, text=" | ").pack(side="left", padx=10)
+    
+    # Button-Höhe
+    tk.Label(settings_frame, text="Button-Höhe:", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
     button_height_data = jingleplayer_logic.get_button_height_data()
-    button_height_entry = tk.Entry(button_height_frame, width=5)
+    button_height_entry = tk.Entry(settings_frame, width=5)
     button_height_entry.insert(0, str(button_height_data))
     button_height_entry.pack(side="left", padx=5)
-    tk.Button(button_height_frame, text="Aktualisieren", font=("Arial", 10), command=lambda: update_button_height_gui(button_height_entry)).pack(side="left", padx=5)
+    tk.Button(settings_frame, text="Aktualisieren", font=("Arial", 10), command=lambda: update_button_height_gui(button_height_entry)).pack(side="left", padx=5)
+
+def create_button_height_section_gui(settings_window):
+    """Diese Funktion wird nicht mehr benötigt, da sie in create_fadeout_duration_section_gui integriert wurde."""
+    pass
 
 def create_buttons_per_row_section_gui(settings_window):
     """Erstellt den Bereich für die Buttons-pro-Reihe-Einstellung im Einstellungsmenü."""
     buttons_per_row_entries = []  # Lokale Liste für Entry-Felder
     buttons_per_row_data = jingleplayer_logic.get_buttons_per_row_data()
-    # Fix: Ensure always 4 elements
-    if len(buttons_per_row_data) < 4:
-        buttons_per_row_data = list(buttons_per_row_data) + [0] * (4 - len(buttons_per_row_data))
-    for row in range(4):
+    row_count = getattr(jingleplayer_logic, 'DEFAULT_BUTTON_ROW_COUNT', 5)
+    if len(buttons_per_row_data) < row_count:
+        buttons_per_row_data = list(buttons_per_row_data) + [0] * (row_count - len(buttons_per_row_data))
+    for row in range(row_count):
         row_frame = tk.Frame(settings_window)
         row_frame.pack(fill="x", padx=20, pady=5)
         tk.Label(row_frame, text=f"Buttons pro Reihe {row + 1} (0-10):", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
@@ -217,6 +201,101 @@ def create_buttons_per_row_section_gui(settings_window):
         entry.pack(side="left", padx=5)
         buttons_per_row_entries.append(entry)
         tk.Button(row_frame, text="Aktualisieren", font=("Arial", 10), command=lambda row=row: update_buttons_per_row_gui(row, buttons_per_row_entries)).pack(side="left", padx=5)
+
+def create_default_folder_section_gui(settings_window):
+    """Erstellt den Bereich für den Standard-Dateipfad im Einstellungsmenü."""
+    folder_frame = tk.Frame(settings_window)
+    folder_frame.pack(fill="x", padx=20, pady=5)
+    tk.Label(folder_frame, text="Standard-Dateipfad:", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
+    folder_entry = tk.Entry(folder_frame, width=50)
+    folder_entry.insert(0, jingleplayer_logic.get_last_folder())
+    folder_entry.pack(side="left", padx=5)
+    
+    def browse_folder():
+        folder = filedialog.askdirectory(title="Wähle Standard-Dateipfad", initialdir=folder_entry.get(), parent=settings_window)
+        if folder:
+            folder_entry.delete(0, tk.END)
+            folder_entry.insert(0, folder)
+    
+    def update_default_folder():
+        folder = folder_entry.get()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showerror("Fehler", "Ungültiger Pfad. Bitte überprüfen Sie die Eingabe.", parent=settings_window)
+            folder_entry.delete(0, tk.END)
+            folder_entry.insert(0, jingleplayer_logic.get_last_folder())
+            return
+        jingleplayer_logic.set_last_folder(folder)
+        current_settings = jingleplayer_logic.get_current_settings()
+        jingleplayer_logic.save_settings(current_settings)
+        messagebox.showinfo("Gespeichert", f"Standard-Dateipfad wurde auf:\n{folder}\ngespeichert.", parent=settings_window)
+    
+    tk.Button(folder_frame, text="Durchsuchen", font=("Arial", 10), command=browse_folder).pack(side="left", padx=5)
+    tk.Button(folder_frame, text="Speichern", font=("Arial", 10), command=update_default_folder).pack(side="left", padx=5)
+
+def create_settings_file_location_section_gui(settings_window):
+    """Erstellt den Bereich für den Speicherort der Einstellungsdatei im Einstellungsmenü."""
+    settings_frame = tk.Frame(settings_window)
+    settings_frame.pack(fill="x", padx=20, pady=5)
+    tk.Label(settings_frame, text="Speicherort Einstellungsdatei:", font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS)).pack(side="left")
+    settings_location_entry = tk.Entry(settings_frame, width=50)
+    settings_location_entry.insert(0, str(jingleplayer_logic.settings_file))
+    settings_location_entry.pack(side="left", padx=5)
+    
+    def browse_settings_folder():
+        folder = filedialog.askdirectory(title="Wähle Speicherort für Einstellungsdatei", 
+                                        initialdir=str(jingleplayer_logic.settings_file.parent), 
+                                        parent=settings_window)
+        if folder:
+            settings_location_entry.delete(0, tk.END)
+            settings_location_entry.insert(0, os.path.join(folder, "jingleplayer_settings.json"))
+    
+    def update_settings_location():
+        new_path = settings_location_entry.get()
+        if not new_path:
+            messagebox.showerror("Fehler", "Pfad darf nicht leer sein.", parent=settings_window)
+            return
+        
+        try:
+            new_path = Path(new_path)
+            # Sicherstelle, dass der Dateiname .json ist
+            if new_path.suffix != ".json":
+                new_path = new_path.with_suffix(".json")
+            
+            # Prüfe ob das Verzeichnis existiert
+            new_dir = new_path.parent
+            if not new_dir.exists():
+                try:
+                    new_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    messagebox.showerror("Fehler", f"Verzeichnis konnte nicht erstellt werden:\n{e}", parent=settings_window)
+                    settings_location_entry.delete(0, tk.END)
+                    settings_location_entry.insert(0, str(jingleplayer_logic.settings_file))
+                    return
+            
+            # Kopiere alte Datei zum neuen Ort, falls sie existiert
+            if jingleplayer_logic.settings_file.exists():
+                try:
+                    import shutil
+                    shutil.copy2(str(jingleplayer_logic.settings_file), str(new_path))
+                except Exception as e:
+                    messagebox.showerror("Fehler", f"Einstellungen konnten nicht kopiert werden:\n{e}", parent=settings_window)
+                    return
+            
+            # Aktualisiere den Pfad in der Logik
+            jingleplayer_logic.settings_file = new_path
+            
+            # Speichere aktuelle Einstellungen am neuen Ort
+            current_settings = jingleplayer_logic.get_current_settings()
+            jingleplayer_logic.save_settings(current_settings)
+            
+            messagebox.showinfo("Gespeichert", f"Speicherort wurde auf:\n{new_path}\ngeändert.\n\nBitte starten Sie die Anwendung neu.", parent=settings_window)
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Fehler beim Ändern des Speicherorts:\n{e}", parent=settings_window)
+            settings_location_entry.delete(0, tk.END)
+            settings_location_entry.insert(0, str(jingleplayer_logic.settings_file))
+    
+    tk.Button(settings_frame, text="Durchsuchen", font=("Arial", 10), command=browse_settings_folder).pack(side="left", padx=5)
+    tk.Button(settings_frame, text="Ändern", font=("Arial", 10), command=update_settings_location).pack(side="left", padx=5)
 
 def change_button_color_gui(settings_window, index):  # settings_window übergeben für messagebox
     color_code = colorchooser.askcolor(title=f"Farbe für Jingle {index} wählen", parent=settings_window)[1]  # parent hinzugefügt
@@ -233,6 +312,11 @@ def assign_jingle_file_gui(settings_window, index):  # settings_window übergebe
     jingle_paths_data = jingleplayer_logic.get_jingle_paths_data() # HIER INITIALISIEREN, VOR DER IF-BEDINGUNG
     if file_path:
         jingle_paths_data[index - 1] = file_path
+        # Save last folder
+        try:
+            jingleplayer_logic.set_last_folder(os.path.dirname(file_path))
+        except Exception:
+            pass
         current_settings = jingleplayer_logic.get_current_settings()  # Aktuelle Einstellungen holen
         jingleplayer_logic.update_settings_data(jingleplayer_logic.button_texts, jingleplayer_logic.button_colors, jingle_paths_data, jingleplayer_logic.buttons_per_row, jingleplayer_logic.fadeout_duration, jingleplayer_logic.button_height, current_settings["window_size"], current_settings["volume"])  # Einstellungen in Logik aktualisieren
         jingleplayer_logic.save_settings(current_settings)  # Einstellungen speichern
@@ -292,14 +376,51 @@ def update_buttons_per_row_gui(row, buttons_per_row_entries):
             buttons_per_row_entries[row].insert(0, str(jingleplayer_logic.buttons_per_row[row]))
         else:
             current_settings = jingleplayer_logic.get_current_settings()
+            # Anpassung: Elemente in den flachen Button-Listen an der richtigen Stelle einfügen/entfernen
             buttons_per_row_data = jingleplayer_logic.get_buttons_per_row_data()
-            if len(buttons_per_row_data) < 4:
-                buttons_per_row_data = list(buttons_per_row_data) + [0] * (4 - len(buttons_per_row_data))
-            buttons_per_row_data[row] = value
+            row_count = getattr(jingleplayer_logic, 'DEFAULT_BUTTON_ROW_COUNT', 5)
+            if len(buttons_per_row_data) < row_count:
+                buttons_per_row_data = list(buttons_per_row_data) + [0] * (row_count - len(buttons_per_row_data))
+
+            old_count = buttons_per_row_data[row]
+            new_count = value
+            # Berechne flachen Startindex der betroffenen Reihe
+            start_index = sum(buttons_per_row_data[:row])
+
+            # Hole aktuelle flachen Listen (kopien)
+            texts = jingleplayer_logic.get_button_texts_data()[:]
+            colors = jingleplayer_logic.get_button_colors_data()[:]
+            paths = jingleplayer_logic.get_jingle_paths_data()[:]
+
+            if new_count > old_count:
+                # Einfügen: neue Platzhalter am Ende der aktuellen Reihe einfügen
+                delta = new_count - old_count
+                insert_pos = start_index + old_count
+                for _ in range(delta):
+                    texts.insert(insert_pos, "")
+                    colors.insert(insert_pos, "SystemButtonFace")
+                    paths.insert(insert_pos, "")
+                    insert_pos += 1
+            elif new_count < old_count:
+                # Entfernen: entferne überschüssige Einträge aus der aktuellen Reihe
+                delta = old_count - new_count
+                remove_start = start_index + new_count
+                for _ in range(delta):
+                    if remove_start < len(texts):
+                        texts.pop(remove_start)
+                    if remove_start < len(colors):
+                        colors.pop(remove_start)
+                    if remove_start < len(paths):
+                        paths.pop(remove_start)
+
+            # Setze die neue Anzahl in der per-row Liste
+            buttons_per_row_data[row] = new_count
+
+            # Aktualisiere die Einstellungen mit den modifizierten flachen Listen
             jingleplayer_logic.update_settings_data(
-                jingleplayer_logic.button_texts,
-                jingleplayer_logic.button_colors,
-                jingleplayer_logic.jingle_paths,
+                texts,
+                colors,
+                paths,
                 buttons_per_row_data,
                 jingleplayer_logic.fadeout_duration,
                 jingleplayer_logic.button_height,
@@ -381,22 +502,108 @@ def open_button_settings_gui(index):
     text_input.insert(0, button_texts_data[index])
     text_input.pack(pady=5)
 
-    # Color chooser for button color
-    tk.Label(current_popup, text="Button-Farbe:").pack(pady=5)
-    color_button = tk.Button(current_popup, text="Farbe wählen", command=lambda: choose_color_gui(index, color_button))
-    color_button.pack(pady=5)
+    # Inline color picker (palette + preview)
+    tk.Label(current_popup, text="Button-Farbe:").pack(pady=(8,2))
+    color_frame = tk.Frame(current_popup)
+    color_frame.pack(pady=2)
+    # Preview
+    color_preview = tk.Label(color_frame, text=" ", width=10, bg=jingleplayer_logic.get_button_colors_data()[index])
+    color_preview.pack(side="left", padx=5)
+    # Palette of common colors
+    palette_colors = ["SystemButtonFace", "red", "green", "blue", "yellow", "orange", "purple", "gray", "white", "black"]
+    palette_frame = tk.Frame(current_popup)
+    palette_frame.pack(pady=2)
+    def _set_color(c):
+        color_preview.config(bg=c)
+    for c in palette_colors:
+        b = tk.Button(palette_frame, bg=c, width=2, command=lambda c=c: _set_color(c))
+        b.pack(side="left", padx=2, pady=2)
+    # Optional custom color (still opens native dialog if clicked)
+    def pick_custom_color():
+        col = colorchooser.askcolor(parent=current_popup)[1]
+        if col:
+            _set_color(col)
+    tk.Button(current_popup, text="Custom...", command=pick_custom_color).pack(pady=(4,8))
 
-    # File chooser for button file
-    tk.Label(current_popup, text="Jingle-Datei:").pack(pady=5)
-    file_button = tk.Button(current_popup, text="Datei wählen", command=lambda: choose_file_gui(index, file_button))
-    file_button.pack(pady=5)
+    # Inline simple file browser: folder entry + file list (filter .mp3/.wav)
+    tk.Label(current_popup, text="Jingle-Datei (wähle Datei aus Liste oder füge Pfad ein):").pack(pady=(6,2))
+    file_frame = tk.Frame(current_popup)
+    file_frame.pack(fill="both", expand=False, padx=8)
+    file_entry = tk.Entry(file_frame, width=60)
+    file_entry.pack(side="top", fill="x", padx=2, pady=4)
+
+    # Folder navigation
+    nav_frame = tk.Frame(file_frame)
+    nav_frame.pack(fill="x", pady=2)
+    # Determine initial folder from existing jingle path if available
+    existing_paths = jingleplayer_logic.get_jingle_paths_data()
+    existing_path = existing_paths[index] if index < len(existing_paths) else ""
+    initial_folder = str(Path(existing_path).parent) if existing_path else jingleplayer_logic.get_last_folder()
+    current_folder_var = tk.StringVar(value=initial_folder)
+    folder_entry = tk.Entry(nav_frame, textvariable=current_folder_var, width=50)
+    folder_entry.pack(side="left", padx=2)
+    def refresh_file_list():
+        folder = folder_entry.get() or str(Path.home())
+        try:
+            items = os.listdir(folder)
+        except Exception:
+            items = []
+        files = [f for f in items if os.path.isfile(os.path.join(folder, f)) and os.path.splitext(f)[1].lower() in ('.mp3', '.wav')]
+        listbox.delete(0, tk.END)
+        for f in sorted(files):
+            listbox.insert(tk.END, f)
+        current_folder_var.set(folder)
+    def go_up():
+        p = Path(folder_entry.get())
+        if p.parent:
+            folder_entry.delete(0, tk.END)
+            folder_entry.insert(0, str(p.parent))
+            refresh_file_list()
+    tk.Button(nav_frame, text="↑ Up", width=6, command=go_up).pack(side="left", padx=2)
+    tk.Button(nav_frame, text="⟳ Refresh", width=8, command=refresh_file_list).pack(side="left", padx=2)
+
+    listbox_frame = tk.Frame(file_frame)
+    listbox_frame.pack(fill="both", expand=False, pady=4)
+    listbox = tk.Listbox(listbox_frame, height=6, width=70)
+    listbox.pack(side="left", fill="both", expand=True)
+    scrollbar = tk.Scrollbar(listbox_frame, orient="vertical", command=listbox.yview)
+    scrollbar.pack(side="right", fill="y")
+    listbox.config(yscrollcommand=scrollbar.set)
+
+    def on_listbox_select(evt):
+        sel = listbox.curselection()
+        if sel:
+            filename = listbox.get(sel[0])
+            folder = folder_entry.get() or str(Path.cwd())
+            file_entry.delete(0, tk.END)
+            file_entry.insert(0, os.path.join(folder, filename))
+    listbox.bind('<<ListboxSelect>>', on_listbox_select)
+
+    # Initialize file list
+    refresh_file_list()
+    # Prefill file entry with existing path and select in listbox if present
+    if existing_path:
+        file_entry.delete(0, tk.END)
+        file_entry.insert(0, existing_path)
+        try:
+            basename = os.path.basename(existing_path)
+            # find in listbox
+            for i in range(listbox.size()):
+                if listbox.get(i) == basename:
+                    listbox.selection_clear(0, tk.END)
+                    listbox.selection_set(i)
+                    listbox.see(i)
+                    break
+        except Exception:
+            pass
 
     # Button frame for "Übernehmen" and "Abbrechen"
     button_frame = tk.Frame(current_popup)
     button_frame.pack(pady=10)
 
     # Save button
-    save_button = tk.Button(button_frame, text="Übernehmen", bg="lightgray", command=lambda: save_button_settings_gui(index, text_input.get(), color_button.cget("bg"), file_button.cget("text")))
+    save_button = tk.Button(button_frame, text="Übernehmen", bg="lightgray",
+                            command=lambda: save_button_settings_gui(index, text_input.get(), color_preview.cget("bg"), file_entry.get()))
     save_button.pack(side="left", padx=5)
 
     # Close button
@@ -427,6 +634,12 @@ def save_button_settings_gui(index, text, color, file_path):
     window_size = current_settings["window_size"]
     volume = current_settings["volume"]
     jingleplayer_logic.update_settings_data(button_texts_data, button_colors_data, jingle_paths_data, jingleplayer_logic.buttons_per_row, jingleplayer_logic.fadeout_duration, jingleplayer_logic.button_height, window_size, volume)
+    # Save last folder from file_path if provided
+    try:
+        if file_path:
+            jingleplayer_logic.set_last_folder(os.path.dirname(file_path))
+    except Exception:
+        pass
     jingleplayer_logic.save_settings(current_settings)  # Einstellungen speichern
     if current_popup is not None:
         current_popup.destroy()  # Close the popup after saving
@@ -463,42 +676,87 @@ def update_buttons_gui(event=None, initial=False):
     buttons_per_row_data = jingleplayer_logic.get_buttons_per_row_data()
     button_height_data = jingleplayer_logic.get_button_height_data()
 
-    if len(buttons_per_row_data) < 4:
-        buttons_per_row_data = list(buttons_per_row_data) + [0] * (4 - len(buttons_per_row_data))
+    row_count = getattr(jingleplayer_logic, 'DEFAULT_BUTTON_ROW_COUNT', 5)
+    if len(buttons_per_row_data) < row_count:
+        buttons_per_row_data = list(buttons_per_row_data) + [0] * (row_count - len(buttons_per_row_data))
 
-    for row in range(4):
+    for row in range(row_count):
         print(f"Debug: Row loop - row: {row}, buttons_per_row_data[row]: {buttons_per_row_data[row]}")
         if buttons_per_row_data[row] > 0:
             row_frame = tk.Frame(content_frame)
             row_frame.pack(fill="x", padx=20, pady=5)
             for i in range(buttons_per_row_data[row]):
                 print(f"Debug: Button loop - i: {i}, button_index: {button_index}")
-                # Do NOT modify button_texts_data here at all!
                 btn_text = button_texts_data[button_index] if button_index < len(button_texts_data) and button_texts_data[button_index] else f"Jingle {button_index + 1}"
                 btn_color = button_colors_data[button_index] if button_index < len(button_colors_data) else "SystemButtonFace"
 
-                button = tk.Button(row_frame, text=btn_text,
-                                   font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS),
-                                   bg=btn_color,
-                                   width=10, height=button_height_data,
-                                   command=lambda i=button_index: on_button_click_gui(i + 1))
-                button.grid(row=0, column=i, sticky="ew", padx=5, pady=5)
-                button.bind("<Button-3>", lambda event, i=button_index: on_button_right_click_gui(event, i))
+                # Custom button frame: colored, clickable, with label at top and slider inside
+                btn_container = tk.Frame(row_frame, bg=btn_color, relief="raised", bd=2, highlightbackground="black", highlightthickness=1)
+                btn_container.grid(row=0, column=i, sticky="nsew", padx=5, pady=5)
                 row_frame.grid_columnconfigure(i, weight=1)
 
-                buttons.append(button)
+                # Button label at top
+                btn_label = tk.Label(btn_container, text=btn_text, font=("Arial", jingleplayer_logic.FONT_SIZE_BUTTONS), bg=btn_color, anchor='n')
+                # Set button height using configured value
+                btn_label.pack(fill='x', pady=(2,0))
+                btn_container.update_idletasks()
+                # Height logic: set min height for container and label
+                try:
+                    pixel_height = int(button_height_data) * 20  # scale factor, tweak as needed
+                    btn_container.config(height=pixel_height)
+                    btn_label.config(height=int(button_height_data))
+                except Exception:
+                    pass
 
-                indicator_frame = tk.Frame(row_frame)
-                indicator_frame.grid(row=1, column=i, sticky="ew")
+                # Slider inside button
+                try:
+                    vols = jingleplayer_logic.get_button_volumes_data()
+                    initial_db = vols[button_index] if button_index < len(vols) else 0
+                except Exception:
+                    initial_db = 0
+                # Place slider and dB label side by side in a subframe
+                slider_row = tk.Frame(btn_container, bg=btn_color)
+                slider_row.pack(fill='x', padx=5, pady=(0,2))
+                vol_slider = tk.Scale(slider_row, from_=-10, to=10, orient="horizontal", resolution=1, showvalue=False, bg=btn_color, troughcolor="white", highlightthickness=0, sliderlength=10, width=8)
+                vol_slider.set(initial_db)
+                vol_slider.pack(side="left", fill='x', expand=True)
+                # Only slider, no dB value label
+                def slider_callback(val, idx=button_index):
+                    # Snap to 0 if near 0 (±1 dB)
+                    try:
+                        v = int(float(val))
+                    except Exception:
+                        v = 0
+                    if -1 < v < 1:
+                        v = 0
+                        vol_slider.set(0)
+                    on_button_volume_change_gui(idx+1, v)
+                vol_slider.config(command=slider_callback)
+                # Size the slider to match the button width
+                try:
+                    root.update_idletasks()
+                    btn_pixel_width = btn_container.winfo_reqwidth() if hasattr(btn_container, 'winfo_reqwidth') else 100
+                    vol_slider.config(length=max(40, int(btn_pixel_width)-40))
+                except Exception:
+                    pass
 
-                indicator = tk.Canvas(indicator_frame, width=40, height=40)
-                indicator.create_rectangle(10, 10, 16, 30, fill="green")
-                indicator.create_rectangle(20, 10, 26, 30, fill="green")
-                indicator.pack(side="left")
+                # Indicator (play/pause) to the right of the slider
+                indicator = tk.Canvas(btn_container, width=12, height=12, bg=btn_color, highlightthickness=0)
+                indicator.place(relx=1.0, rely=0.0, anchor="ne", x=-2, y=2)
                 indicators.append(indicator)
                 indicator_canvases.append(indicator)
+                # Draw initial indicator state (not playing)
+                update_indicator_gui(button_index + 1, False)
 
-                tk.Label(indicator_frame, text=str(button_index + 1), font=("Arial", 8)).pack(side="left")
+                # Make the whole button frame clickable (play/pause)
+                def play_callback(event, idx=button_index):
+                    on_button_click_gui(idx+1)
+                btn_container.bind("<Button-1>", play_callback)
+                btn_label.bind("<Button-1>", play_callback)
+                vol_slider.bind("<Button-3>", lambda event, i=button_index: on_button_right_click_gui(event, i))
+                btn_label.bind("<Button-3>", lambda event, i=button_index: on_button_right_click_gui(event, i))
+                btn_container.bind("<Button-3>", lambda event, i=button_index: on_button_right_click_gui(event, i))
+                buttons.append(btn_container)
                 button_index += 1
 
     # Nur speichern, wenn nicht initial
@@ -524,6 +782,52 @@ def set_volume_gui(val):
     jingleplayer_logic.set_volume_logic(volume_percent)  # Logik Funktion aufrufen, um Lautstärke zu setzen und zu speichern
     current_settings = jingleplayer_logic.get_current_settings()  # Aktuelle Einstellungen holen
     jingleplayer_logic.save_settings(current_settings)  # Einstellungen speichern
+
+def on_button_volume_change_gui(index, val):
+    """GUI callback when a per-button dB slider changes. Index is 1-based."""
+    try:
+        db_val = int(float(val))
+    except Exception:
+        return
+    jingleplayer_logic.set_button_volume(index, db_val)
+    # Save settings after change
+    current_settings = jingleplayer_logic.get_current_settings()
+    jingleplayer_logic.save_settings(current_settings)
+
+def show_help_gui():
+    """Zeigt die Hilfedatei in einem neuen Fenster an."""
+    help_file = Path(__file__).parent / "HELP.md"
+    
+    # Versuche, die Hilfedatei zu lesen
+    try:
+        if help_file.exists():
+            with open(help_file, "r", encoding="utf-8") as f:
+                help_text = f.read()
+        else:
+            help_text = "Hilfedatei nicht gefunden.\n\nDatei: HELP.md"
+    except Exception as e:
+        help_text = f"Fehler beim Laden der Hilfedatei:\n{e}"
+    
+    # Erstelle Hilfe-Fenster
+    help_window = tk.Toplevel(root)
+    help_window.title("Jingleplayer - Hilfe")
+    help_window.geometry("700x600")
+    
+    # Scrollbarer Text-Widget
+    scrollbar = tk.Scrollbar(help_window)
+    scrollbar.pack(side="right", fill="y")
+    
+    text_widget = tk.Text(help_window, wrap="word", yscrollcommand=scrollbar.set)
+    text_widget.pack(fill="both", expand=True, padx=10, pady=10)
+    scrollbar.config(command=text_widget.yview)
+    
+    # Füge Hilftext ein
+    text_widget.insert("1.0", help_text)
+    text_widget.config(state="disabled")  # Schreibgeschützt
+    
+    # Schließen-Button
+    close_btn = tk.Button(help_window, text="Schließen", command=help_window.destroy)
+    close_btn.pack(pady=10)
 
 def on_closing_gui():
     current_settings = jingleplayer_logic.get_current_settings()  # Aktuelle Einstellungen holen
