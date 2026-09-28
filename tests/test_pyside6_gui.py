@@ -225,7 +225,9 @@ def test_incomplete_text_and_color_lists_are_handled_defensively(qt_app, isolate
     qt_app.processEvents()
 
 
-def test_idle_tile_click_starts_its_jingle(qt_app, isolated_settings, mocked_audio):
+def test_idle_tile_click_starts_its_jingle(qt_app, isolated_settings, mocked_audio, monkeypatch):
+    errors = []
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
     window = gui.create_main_window()
     play_calls, stop_calls = mocked_audio
     window.show()
@@ -236,11 +238,16 @@ def test_idle_tile_click_starts_its_jingle(qt_app, isolated_settings, mocked_aud
     assert play_calls == [(1, "a.wav", 750)]
     assert stop_calls == []
     assert window.jingle_tiles[0].playing is True
+    assert errors == []
 
     window.close()
 
 
-def test_second_tile_click_stops_the_same_jingle(qt_app, isolated_settings, mocked_audio):
+def test_second_tile_click_stops_the_same_jingle(
+    qt_app, isolated_settings, mocked_audio, monkeypatch
+):
+    errors = []
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
     window = gui.create_main_window()
     play_calls, stop_calls = mocked_audio
 
@@ -250,6 +257,7 @@ def test_second_tile_click_stops_the_same_jingle(qt_app, isolated_settings, mock
     assert play_calls == [(1, "a.wav", 750)]
     assert stop_calls == [(1, 750)]
     assert window.jingle_tiles[0].playing is False
+    assert errors == []
 
     window.close()
 
@@ -268,18 +276,84 @@ def test_different_tiles_play_independently(qt_app, isolated_settings, mocked_au
     window.close()
 
 
-def test_failed_playback_does_not_mark_tile_as_playing(qt_app, isolated_settings, monkeypatch):
+@pytest.mark.parametrize(
+    "error_text",
+    [
+        "Kein Jingle zugewiesen. Bitte wählen Sie eine Datei im Einstellungsmenü.",
+        "Die Datei C:/missing.mp3 konnte nicht geladen oder abgespielt werden: Datei fehlt",
+        "Das Dateiformat .ogg wird nicht unterstützt.",
+    ],
+)
+def test_failed_playback_shows_logic_error_once(
+    qt_app, isolated_settings, monkeypatch, error_text
+):
+    errors = []
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
     monkeypatch.setattr(
         gui.jingleplayer_logic,
         "play_jingle",
-        lambda index, path, fadeout: {"error": "Playback failed", "success": False},
+        lambda index, path, fadeout: {"error": error_text, "success": False},
     )
     window = gui.create_main_window()
 
     window.jingle_tiles[0].clicked.emit(1)
 
     assert window.jingle_tiles[0].playing is False
+    assert errors == [
+        (window, "Jingle konnte nicht abgespielt werden", error_text)
+    ]
 
+    window.close()
+
+
+def test_failed_playback_leaves_other_jingle_playing(
+    qt_app, isolated_settings, monkeypatch
+):
+    errors = []
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "play_jingle",
+        lambda index, path, fadeout: {
+            "error": "Datei konnte nicht geladen werden",
+            "success": False,
+        },
+    )
+    window = gui.create_main_window()
+    window.jingle_tiles[0].set_playing(True)
+
+    window.jingle_tiles[1].clicked.emit(2)
+
+    assert window.jingle_tiles[0].playing is True
+    assert window.jingle_tiles[1].playing is False
+    assert len(errors) == 1
+    window.close()
+
+
+def test_successful_retry_after_playback_error(
+    qt_app, isolated_settings, monkeypatch
+):
+    errors = []
+    results = iter(
+        [
+            {"error": "Erster Start fehlgeschlagen", "success": False},
+            {"indicator_update": {"index": 1, "playing": True}, "success": True},
+        ]
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "play_jingle",
+        lambda index, path, fadeout: next(results),
+    )
+    window = gui.create_main_window()
+
+    window.jingle_tiles[0].clicked.emit(1)
+    assert window.jingle_tiles[0].playing is False
+    window.jingle_tiles[0].clicked.emit(1)
+
+    assert window.jingle_tiles[0].playing is True
+    assert len(errors) == 1
     window.close()
 
 
@@ -296,6 +370,8 @@ def test_playing_border_preserves_saved_background_color(qt_app, isolated_settin
 
 
 def test_natural_end_resets_only_the_reported_tile(qt_app, isolated_settings, monkeypatch):
+    errors = []
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
     window = gui.create_main_window()
     window.jingle_tiles[0].set_playing(True)
     window.jingle_tiles[1].set_playing(True)
@@ -309,6 +385,7 @@ def test_natural_end_resets_only_the_reported_tile(qt_app, isolated_settings, mo
 
     assert window.jingle_tiles[0].playing is False
     assert window.jingle_tiles[1].playing is True
+    assert errors == []
     window.close()
 
 
@@ -982,8 +1059,10 @@ def test_settings_dialog_rejects_all_zero_rows(qt_app, monkeypatch):
 
 
 def test_layout_rebuild_preserves_slots_and_uses_sequential_indices(
-    qt_app, isolated_settings
+    qt_app, isolated_settings, monkeypatch
 ):
+    errors = []
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
     settings, _, saved_settings = isolated_settings
     settings["buttons"]["texts"] = [f"Text {index}" for index in range(1, 51)]
     settings["buttons"]["colors"] = ["#0080ff"] * 50
@@ -1010,6 +1089,7 @@ def test_layout_rebuild_preserves_slots_and_uses_sequential_indices(
         for tile in window.jingle_tiles
     )
     assert len(saved_settings) == 2
+    assert errors == []
     window.close()
 
 

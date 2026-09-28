@@ -412,6 +412,13 @@ class JingleplayerMainWindow(QMainWindow):
         result = jingleplayer_logic.play_jingle(index, jingle_path, self.fadeout_duration)
         if result and result.get("success") is True:
             tile.set_playing(True)
+        elif result and result.get("error"):
+            tile.set_playing(False)
+            QMessageBox.critical(
+                self,
+                "Jingle konnte nicht abgespielt werden",
+                result["error"],
+            )
 
     def _open_jingle_editor(self, index):
         list_index = index - 1
