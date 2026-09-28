@@ -56,6 +56,7 @@ def isolated_settings(monkeypatch):
     monkeypatch.setattr(gui.jingleplayer_logic, "get_current_settings", lambda: deepcopy(settings))
     monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", lambda value: saved_settings.append(deepcopy(value)))
     monkeypatch.setattr(gui.jingleplayer_logic, "check_sound_end", lambda: [])
+    monkeypatch.setattr(gui.jingleplayer_logic, "get_playing_indices", lambda: [])
     monkeypatch.setattr(gui.jingleplayer_logic, "update_settings_data", update_settings)
     monkeypatch.setattr(gui.jingleplayer_logic, "set_button_volume", set_button_volume)
     monkeypatch.setattr(gui.jingleplayer_logic, "set_last_folder", set_last_folder)
@@ -782,7 +783,7 @@ def test_settings_button_replaces_main_window_fadeout_control(qt_app, isolated_s
     window.close()
 
 
-def test_settings_dialog_shows_fadeout_and_read_only_layout_values(qt_app):
+def test_settings_dialog_shows_editable_audio_and_layout_values(qt_app):
     dialog = gui.SettingsDialog(750, [8, 5, 6, 4, 9], 3)
 
     assert dialog.windowTitle() == "Einstellungen"
@@ -795,9 +796,16 @@ def test_settings_dialog_shows_fadeout_and_read_only_layout_values(qt_app):
     assert [spin.value() for spin in dialog.per_row_spins] == [8, 5, 6, 4, 9]
     assert all(spin.minimum() == 0 for spin in dialog.per_row_spins)
     assert all(spin.maximum() == 10 for spin in dialog.per_row_spins)
-    assert all(not spin.isEnabled() for spin in dialog.per_row_spins)
+    assert all(spin.isEnabled() for spin in dialog.per_row_spins)
     assert dialog.button_height_spin.value() == 3
-    assert not dialog.button_height_spin.isEnabled()
+    assert dialog.button_height_spin.isEnabled()
+    assert dialog.button_height_spin.minimum() == 1
+    assert dialog.button_height_spin.maximum() == 10
+    assert dialog.get_values() == {
+        "fadeout_duration": 750,
+        "per_row": [8, 5, 6, 4, 9],
+        "button_height": 3,
+    }
     dialog.reject()
 
 
@@ -833,12 +841,14 @@ def test_cancelled_settings_dialog_changes_nothing(qt_app, isolated_settings, mo
 
     monkeypatch.setattr(gui, "SettingsDialog", RejectedDialog)
     window = gui.create_main_window()
+    original_tiles = list(window.jingle_tiles)
     original_states = [tile.playing for tile in window.jingle_tiles]
 
     window._open_settings_dialog()
 
     assert settings == original_settings
     assert window.fadeout_duration == 750
+    assert window.jingle_tiles == original_tiles
     assert [tile.playing for tile in window.jingle_tiles] == original_states
     assert saved_settings == []
     window.close()
@@ -865,17 +875,22 @@ def test_settings_dialog_save_accepts_while_escape_and_close_reject(qt_app):
     assert close_dialog.result() == gui.QDialog.DialogCode.Rejected
 
 
-def test_accepted_settings_dialog_saves_only_fadeout(qt_app, isolated_settings, monkeypatch):
+def test_accepted_settings_dialog_saves_all_values_once(qt_app, isolated_settings, monkeypatch):
     settings, _, saved_settings = isolated_settings
-    original_per_row = list(settings["buttons"]["per_row"])
-    original_height = settings["button_height"]
 
     class AcceptedDialog:
         def __init__(self, *args):
-            self.fadeout_spin = type("Value", (), {"value": lambda self: 2500})()
+            pass
 
         def exec(self):
             return gui.QDialog.DialogCode.Accepted
+
+        def get_values(self):
+            return {
+                "fadeout_duration": 2500,
+                "per_row": [0, 2, 0, 0, 0],
+                "button_height": 1,
+            }
 
     monkeypatch.setattr(gui, "SettingsDialog", AcceptedDialog)
     window = gui.create_main_window()
@@ -883,15 +898,18 @@ def test_accepted_settings_dialog_saves_only_fadeout(qt_app, isolated_settings, 
     window._open_settings_dialog()
 
     assert window.fadeout_duration == 2500
+    assert window.buttons_per_row == [0, 2, 0, 0, 0]
+    assert window.button_height == 1
     assert settings["fadeout_duration"] == 2500
-    assert settings["buttons"]["per_row"] == original_per_row
-    assert settings["button_height"] == original_height
+    assert settings["buttons"]["per_row"] == [0, 2, 0, 0, 0]
+    assert settings["button_height"] == 1
+    assert [layout.count() for layout in window.row_layouts] == [0, 2, 0, 0, 0]
     assert len(saved_settings) == 1
     window.close()
 
 
 def test_saved_settings_dialog_updates_only_fadeout_without_audio_or_tile_changes(
-    qt_app, isolated_settings, mocked_audio
+    qt_app, isolated_settings, mocked_audio, monkeypatch
 ):
     settings, _, saved_settings = isolated_settings
     original_settings = deepcopy(settings)
@@ -899,6 +917,7 @@ def test_saved_settings_dialog_updates_only_fadeout_without_audio_or_tile_change
     window = gui.create_main_window()
     window.jingle_tiles[0].set_playing(True)
     original_tile_style = window.jingle_tiles[0].styleSheet()
+    monkeypatch.setattr(gui.jingleplayer_logic, "get_playing_indices", lambda: [1])
 
     window._save_fadeout_duration(2500)
 
@@ -942,3 +961,124 @@ def test_changed_fadeout_survives_close_and_simulated_restart(qt_app, isolated_s
     assert saved_after_close["fadeout_duration"] == 1800
     assert restarted_window.fadeout_duration == 1800
     restarted_window.close()
+
+
+def test_settings_dialog_rejects_all_zero_rows(qt_app, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        gui.QMessageBox,
+        "warning",
+        lambda *args: warnings.append(args[2]),
+    )
+    dialog = gui.SettingsDialog(750, [1, 0, 0, 0, 0], 2)
+    for spin in dialog.per_row_spins:
+        spin.setValue(0)
+
+    dialog.button_box.button(gui.QDialogButtonBox.StandardButton.Save).click()
+
+    assert dialog.result() != gui.QDialog.DialogCode.Accepted
+    assert warnings == ["Mindestens eine Reihe muss einen Jingle enthalten."]
+    dialog.reject()
+
+
+def test_layout_rebuild_preserves_slots_and_uses_sequential_indices(
+    qt_app, isolated_settings
+):
+    settings, _, saved_settings = isolated_settings
+    settings["buttons"]["texts"] = [f"Text {index}" for index in range(1, 51)]
+    settings["buttons"]["colors"] = ["#0080ff"] * 50
+    settings["buttons"]["paths"] = [f"{index}.wav" for index in range(1, 51)]
+    settings["buttons"]["volumes"] = list(range(50))
+    settings["buttons"]["per_row"] = [8, 5, 6, 4, 9]
+    window = gui.create_main_window()
+
+    window._save_application_settings(900, [2, 0, 0, 0, 0], 1)
+    assert len(window.jingle_tiles) == 2
+    assert [layout.count() for layout in window.row_layouts] == [2, 0, 0, 0, 0]
+    assert [tile.jingle_index for tile in window.jingle_tiles] == [1, 2]
+    assert all(tile.minimumHeight() == 48 for tile in window.jingle_tiles)
+
+    window._save_application_settings(1200, [0, 5, 0, 0, 0], 3)
+    assert [layout.count() for layout in window.row_layouts] == [0, 5, 0, 0, 0]
+    assert [tile.jingle_index for tile in window.jingle_tiles] == [1, 2, 3, 4, 5]
+    assert window.jingle_tiles[4].label.text() == "Text 5"
+    assert settings["buttons"]["paths"][19] == "20.wav"
+    assert settings["buttons"]["volumes"][19] == 19
+    assert all(tile.minimumHeight() == 80 for tile in window.jingle_tiles)
+    assert all(
+        tile.sizePolicy().verticalPolicy() == gui.QSizePolicy.Policy.Expanding
+        for tile in window.jingle_tiles
+    )
+    assert len(saved_settings) == 2
+    window.close()
+
+
+def test_rebuild_restores_playing_state_without_stopping_hidden_audio(
+    qt_app, isolated_settings, mocked_audio, monkeypatch
+):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["texts"] = [f"Text {index}" for index in range(1, 51)]
+    settings["buttons"]["colors"] = ["blue"] * 50
+    settings["buttons"]["paths"] = [f"{index}.wav" for index in range(1, 51)]
+    settings["buttons"]["volumes"] = [0] * 50
+    settings["buttons"]["per_row"] = [10, 10, 0, 0, 0]
+    play_calls, stop_calls = mocked_audio
+    running = {1, 20}
+    monkeypatch.setattr(gui.jingleplayer_logic, "get_playing_indices", lambda: sorted(running))
+    window = gui.create_main_window()
+
+    assert window.jingle_tiles[0].playing is True
+    assert window.jingle_tiles[19].playing is True
+    window._save_application_settings(750, [2, 0, 0, 0, 0], 2)
+
+    assert window.jingle_tiles[0].playing is True
+    assert play_calls == []
+    assert stop_calls == []
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "check_sound_end",
+        lambda: [{"index": 20, "playing": False}],
+    )
+    window._poll_sound_end()
+
+    window._save_application_settings(750, [10, 10, 0, 0, 0], 2)
+    assert window.jingle_tiles[19].playing is True
+    assert stop_calls == []
+    window.close()
+
+
+def test_rebuilt_tiles_connect_play_and_edit_once(
+    qt_app, isolated_settings, mocked_audio, monkeypatch
+):
+    play_calls, _ = mocked_audio
+    edited = []
+    window = gui.create_main_window()
+    monkeypatch.setattr(window, "_open_jingle_editor", edited.append)
+
+    window._rebuild_jingle_layout()
+    window._rebuild_jingle_layout()
+    window.jingle_tiles[0].clicked.emit(1)
+    window.jingle_tiles[1].edit_requested.emit(2)
+
+    assert play_calls == [(1, "a.wav", 750)]
+    assert edited == [2]
+    window.close()
+
+
+def test_layout_settings_survive_close_and_restart(qt_app, isolated_settings):
+    settings, _, saved_settings = isolated_settings
+    window = gui.create_main_window()
+    window._save_application_settings(1800, [0, 2, 0, 0, 0], 4)
+    window.close()
+
+    restarted = gui.create_main_window()
+
+    assert settings["fadeout_duration"] == 1800
+    assert settings["buttons"]["per_row"] == [0, 2, 0, 0, 0]
+    assert settings["button_height"] == 4
+    assert restarted.fadeout_duration == 1800
+    assert restarted.buttons_per_row == [0, 2, 0, 0, 0]
+    assert restarted.button_height == 4
+    assert [layout.count() for layout in restarted.row_layouts] == [0, 2, 0, 0, 0]
+    assert saved_settings[-1]["button_height"] == 4
+    restarted.close()

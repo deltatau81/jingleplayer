@@ -161,6 +161,13 @@ def test_end_event_only_affects_its_own_button(audio):
     assert logic.playing_channels[2] is second
 
 
+def test_get_playing_indices_reports_tracked_jingles(audio):
+    start(audio, index=3)
+    start(audio, index=20)
+
+    assert logic.get_playing_indices() == [3, 20]
+
+
 def test_stale_event_after_stop_and_restart_is_ignored(audio):
     old, _ = start(audio)
     old_event = old.endevent

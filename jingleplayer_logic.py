@@ -296,6 +296,11 @@ def check_sound_end():
     return ended_indicators # Rückmeldung für GUI (Liste von Indikator-Updates)
 
 
+def get_playing_indices():
+    """Return the currently tracked 1-based jingle indices."""
+    return list(playing_channels)
+
+
 def update_indicator_state(index, playing):
     # Diese Funktion verwaltet *nur* den Zustand, keine GUI-Aktualisierung direkt
     print(f"Indikator {index} wird auf 'playing'={playing} gesetzt (Logik)")
