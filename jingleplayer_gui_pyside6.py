@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -38,29 +38,27 @@ def contrasting_text_color(background_color):
 
 
 class JingleTile(QFrame):
-    """Read-only visual representation of one configured jingle."""
+    """Clickable visual representation of one configured jingle."""
+
+    clicked = Signal(int)
 
     def __init__(self, index, text, background_color, parent=None):
         super().__init__(parent)
         self.jingle_index = index
         self.jingle_text = str(text)
         self.jingle_color = str(background_color)
+        self.playing = False
 
-        display_color = QColor(self.jingle_color)
-        if not display_color.isValid():
-            display_color = QColor("#f0f0f0")
+        self.display_color = QColor(self.jingle_color)
+        if not self.display_color.isValid():
+            self.display_color = QColor("#f0f0f0")
 
         self.setObjectName("jingleTile")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(64)
-        self.setStyleSheet(
-            "QFrame#jingleTile {"
-            f"background-color: {display_color.name()};"
-            "border: 1px solid rgba(0, 0, 0, 45);"
-            "border-radius: 8px;"
-            "}"
-        )
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._apply_style()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -68,12 +66,34 @@ class JingleTile(QFrame):
         self.label = QLabel(self.jingle_text, self)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setWordWrap(True)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.label.setStyleSheet(
-            f"color: {contrasting_text_color(display_color.name())};"
+            f"color: {contrasting_text_color(self.display_color.name())};"
             "font-weight: 600;"
             "background: transparent;"
         )
         layout.addWidget(self.label)
+
+    def _apply_style(self):
+        border = "3px solid #ffffff" if self.playing else "1px solid rgba(0, 0, 0, 45)"
+        self.setStyleSheet(
+            "QFrame#jingleTile {"
+            f"background-color: {self.display_color.name()};"
+            f"border: {border};"
+            "border-radius: 8px;"
+            "}"
+        )
+
+    def set_playing(self, playing):
+        self.playing = bool(playing)
+        self._apply_style()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit(self.jingle_index)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class JingleplayerMainWindow(QMainWindow):
@@ -93,7 +113,15 @@ class JingleplayerMainWindow(QMainWindow):
         self.row_widgets = []
         self.row_layouts = []
         self.jingle_tiles = []
+        button_settings = current_settings.get("buttons", {})
+        self.jingle_paths = button_settings.get("paths", [])
+        self.fadeout_duration = current_settings.get("fadeout_duration", 0)
         self._build_jingle_layout(current_settings)
+
+        self.sound_end_timer = QTimer(self)
+        self.sound_end_timer.setInterval(jingleplayer_logic.FADEOUT_CHECK_INTERVAL_MS)
+        self.sound_end_timer.timeout.connect(self._poll_sound_end)
+        self.sound_end_timer.start()
 
     def _build_jingle_layout(self, current_settings):
         central_widget = QWidget(self)
@@ -124,7 +152,8 @@ class JingleplayerMainWindow(QMainWindow):
             for _ in range(requested_count):
                 if next_index >= available_count:
                     break
-                tile = JingleTile(next_index, texts[next_index], colors[next_index], row_widget)
+                tile = JingleTile(next_index + 1, texts[next_index], colors[next_index], row_widget)
+                tile.clicked.connect(self._handle_tile_click)
                 row_layout.addWidget(tile, 1)
                 self.jingle_tiles.append(tile)
                 next_index += 1
@@ -135,7 +164,29 @@ class JingleplayerMainWindow(QMainWindow):
 
         self.setCentralWidget(central_widget)
 
+    def _handle_tile_click(self, index):
+        tile = self.jingle_tiles[index - 1]
+        if tile.playing:
+            result = jingleplayer_logic.stop_jingle(index, self.fadeout_duration)
+            indicator_update = result.get("indicator_update", {}) if result else {}
+            if indicator_update.get("playing") is False:
+                tile.set_playing(False)
+            return
+
+        jingle_path = self.jingle_paths[index - 1] if index <= len(self.jingle_paths) else ""
+        result = jingleplayer_logic.play_jingle(index, jingle_path, self.fadeout_duration)
+        if result and result.get("success") is True:
+            tile.set_playing(True)
+
+    def _poll_sound_end(self):
+        indicator_updates = jingleplayer_logic.check_sound_end()
+        for update in indicator_updates or []:
+            index = update["index"]
+            if 1 <= index <= len(self.jingle_tiles):
+                self.jingle_tiles[index - 1].set_playing(update["playing"])
+
     def closeEvent(self, event):
+        self.sound_end_timer.stop()
         current_settings = jingleplayer_logic.get_current_settings()
         current_settings["window_size"] = [self.width(), self.height()]
         jingleplayer_logic.save_settings(current_settings)

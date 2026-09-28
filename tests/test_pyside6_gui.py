@@ -6,6 +6,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFrame  # noqa: E402
 
 import jingleplayer_gui_pyside6 as gui  # noqa: E402
@@ -38,8 +39,27 @@ def isolated_settings(monkeypatch):
     monkeypatch.setattr(gui.jingleplayer_logic, "initialize_settings", lambda: initialize_calls.append(True))
     monkeypatch.setattr(gui.jingleplayer_logic, "get_current_settings", lambda: deepcopy(settings))
     monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", lambda value: saved_settings.append(deepcopy(value)))
+    monkeypatch.setattr(gui.jingleplayer_logic, "check_sound_end", lambda: [])
 
     return settings, initialize_calls, saved_settings
+
+
+@pytest.fixture
+def mocked_audio(monkeypatch):
+    play_calls = []
+    stop_calls = []
+
+    def play(index, path, fadeout_duration):
+        play_calls.append((index, path, fadeout_duration))
+        return {"indicator_update": {"index": index, "playing": True}, "success": True}
+
+    def stop(index, fadeout_duration):
+        stop_calls.append((index, fadeout_duration))
+        return {"indicator_update": {"index": index, "playing": False}}
+
+    monkeypatch.setattr(gui.jingleplayer_logic, "play_jingle", play)
+    monkeypatch.setattr(gui.jingleplayer_logic, "stop_jingle", stop)
+    return play_calls, stop_calls
 
 
 def test_main_window_can_be_constructed_and_closed(qt_app, isolated_settings):
@@ -168,3 +188,148 @@ def test_incomplete_text_and_color_lists_are_handled_defensively(qt_app, isolate
 
     window.close()
     qt_app.processEvents()
+
+
+def test_idle_tile_click_starts_its_jingle(qt_app, isolated_settings, mocked_audio):
+    window = gui.create_main_window()
+    play_calls, stop_calls = mocked_audio
+    window.show()
+    qt_app.processEvents()
+
+    QTest.mouseClick(window.jingle_tiles[0], Qt.MouseButton.LeftButton)
+
+    assert play_calls == [(1, "a.wav", 750)]
+    assert stop_calls == []
+    assert window.jingle_tiles[0].playing is True
+
+    window.close()
+
+
+def test_second_tile_click_stops_the_same_jingle(qt_app, isolated_settings, mocked_audio):
+    window = gui.create_main_window()
+    play_calls, stop_calls = mocked_audio
+
+    window.jingle_tiles[0].clicked.emit(1)
+    window.jingle_tiles[0].clicked.emit(1)
+
+    assert play_calls == [(1, "a.wav", 750)]
+    assert stop_calls == [(1, 750)]
+    assert window.jingle_tiles[0].playing is False
+
+    window.close()
+
+
+def test_different_tiles_play_independently(qt_app, isolated_settings, mocked_audio):
+    window = gui.create_main_window()
+    play_calls, _ = mocked_audio
+
+    window.jingle_tiles[0].clicked.emit(1)
+    window.jingle_tiles[1].clicked.emit(2)
+
+    assert play_calls == [(1, "a.wav", 750), (2, "b.mp3", 750)]
+    assert window.jingle_tiles[0].playing is True
+    assert window.jingle_tiles[1].playing is True
+
+    window.close()
+
+
+def test_failed_playback_does_not_mark_tile_as_playing(qt_app, isolated_settings, monkeypatch):
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "play_jingle",
+        lambda index, path, fadeout: {"error": "Playback failed", "success": False},
+    )
+    window = gui.create_main_window()
+
+    window.jingle_tiles[0].clicked.emit(1)
+
+    assert window.jingle_tiles[0].playing is False
+
+    window.close()
+
+
+def test_playing_border_preserves_saved_background_color(qt_app, isolated_settings, mocked_audio):
+    window = gui.create_main_window()
+    tile = window.jingle_tiles[0]
+
+    tile.clicked.emit(1)
+
+    assert "background-color: #ff0000" in tile.styleSheet()
+    assert "border: 3px solid #ffffff" in tile.styleSheet()
+
+    window.close()
+
+
+def test_natural_end_resets_only_the_reported_tile(qt_app, isolated_settings, monkeypatch):
+    window = gui.create_main_window()
+    window.jingle_tiles[0].set_playing(True)
+    window.jingle_tiles[1].set_playing(True)
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "check_sound_end",
+        lambda: [{"index": 1, "playing": False}],
+    )
+
+    window._poll_sound_end()
+
+    assert window.jingle_tiles[0].playing is False
+    assert window.jingle_tiles[1].playing is True
+    window.close()
+
+
+@pytest.mark.parametrize("no_updates", [None, {}, []])
+def test_no_end_update_leaves_tiles_unchanged(qt_app, isolated_settings, monkeypatch, no_updates):
+    window = gui.create_main_window()
+    window.jingle_tiles[0].set_playing(True)
+    monkeypatch.setattr(gui.jingleplayer_logic, "check_sound_end", lambda: no_updates)
+
+    window._poll_sound_end()
+
+    assert window.jingle_tiles[0].playing is True
+    window.close()
+
+
+def test_multiple_natural_ends_are_applied_in_one_poll(qt_app, isolated_settings, monkeypatch):
+    window = gui.create_main_window()
+    window.jingle_tiles[0].set_playing(True)
+    window.jingle_tiles[1].set_playing(True)
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "check_sound_end",
+        lambda: [
+            {"index": 1, "playing": False},
+            {"index": 2, "playing": False},
+        ],
+    )
+
+    window._poll_sound_end()
+
+    assert window.jingle_tiles[0].playing is False
+    assert window.jingle_tiles[1].playing is False
+    window.close()
+
+
+def test_end_update_for_idle_tile_is_idempotent(qt_app, isolated_settings, monkeypatch):
+    window = gui.create_main_window()
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "check_sound_end",
+        lambda: [{"index": 1, "playing": False}],
+    )
+
+    window._poll_sound_end()
+
+    assert window.jingle_tiles[0].playing is False
+    window.close()
+
+
+def test_sound_end_timer_is_active_until_window_closes(qt_app, isolated_settings):
+    window = gui.create_main_window()
+
+    assert window.sound_end_timer.isActive()
+    assert window.sound_end_timer.interval() == gui.jingleplayer_logic.FADEOUT_CHECK_INTERVAL_MS
+
+    window.close()
+    qt_app.processEvents()
+
+    assert not window.sound_end_timer.isActive()
