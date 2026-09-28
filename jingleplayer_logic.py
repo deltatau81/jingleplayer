@@ -22,12 +22,20 @@ DEFAULT_BUTTON_HEIGHT = 2 # Definiere eine Standardhöhe der Schaltflächen
 DEFAULT_WINDOW_WIDTH = 800 # Definiere eine Standardbreite
 DEFAULT_WINDOW_HEIGHT = 600 # Definiere eine Standardhöhe
 DEFAULT_VOLUME = 100 # Default volume
+MIXER_FREQUENCY = 44100
+MIXER_SIZE = -16
+MIXER_OUTPUT_CHANNELS = 2
+MIXER_BUFFER = 512
+MIXER_CHANNEL_COUNT = DEFAULT_BUTTON_COUNT
 
 # Variable, um den aktuellen Status des Players zu speichern
 current_jingle = None
 jingle_playing = False
-sounds = {} # Dictionary zum Speichern geladener Sound-Objekte, um Wiederholtes Laden zu vermeiden
+sounds = {} # Cache: normalisierter Dateipfad -> pygame Sound
 playing_channels = {}  # Map button index -> pygame Channel (für Laufzeit-Volume-Updates)
+_playbacks_by_event = {}  # Map endevent id -> (button index, exact Channel)
+_events_by_button = {}  # Map button index -> endevent id
+_next_end_event = None
 button_texts = []
 button_colors = []
 jingle_paths = []
@@ -45,8 +53,21 @@ settings_file = data_dir / "jingleplayer_settings.json"
 # Initialisierung von pygame (falls verfügbar)
 if pygame_available:
     try:
+        pygame.mixer.pre_init(
+            frequency=MIXER_FREQUENCY,
+            size=MIXER_SIZE,
+            channels=MIXER_OUTPUT_CHANNELS,
+            buffer=MIXER_BUFFER,
+        )
         pygame.init()
-        pygame.mixer.init()
+        if pygame.mixer.get_init() is None:
+            pygame.mixer.init(
+                frequency=MIXER_FREQUENCY,
+                size=MIXER_SIZE,
+                channels=MIXER_OUTPUT_CHANNELS,
+                buffer=MIXER_BUFFER,
+            )
+        pygame.mixer.set_num_channels(MIXER_CHANNEL_COUNT)
     except Exception as _e:
         print(f"Fehler bei pygame-Initialisierung: {_e}. Audio-Funktionen sind deaktiviert.")
         pygame_available = False
@@ -81,6 +102,9 @@ def load_settings():
             with open(settings_file, "r") as f:
                 loaded_settings = json.load(f)
             loaded_settings = check_and_set_defaults(loaded_settings, default_settings)
+            # remove leftover background_image key if present (feature removed)
+            if 'background_image' in loaded_settings:
+                loaded_settings.pop('background_image', None)
             # Ensure per_row is always a list of length DEFAULT_BUTTON_ROW_COUNT and not empty
             if ("per_row" not in loaded_settings["buttons"] or
                 not isinstance(loaded_settings["buttons"]["per_row"], list) or
@@ -126,59 +150,108 @@ def save_settings(current_settings): # Nimmt die aktuellen Einstellungen als Arg
     except IOError:
         print(f"Die Datei {settings_file} konnte nicht gespeichert werden. Überprüfen Sie die Berechtigungen.")
 
+def calculate_effective_volume(global_percent, button_db):
+    """Convert global percent and a per-button dB offset to pygame's 0..1 range."""
+    try:
+        global_linear = max(0.0, min(100.0, float(global_percent))) / 100.0
+    except (TypeError, ValueError):
+        global_linear = 0.0
+    try:
+        db_multiplier = 10 ** (float(button_db) / 20.0)
+    except (TypeError, ValueError):
+        db_multiplier = 1.0
+    return max(0.0, min(1.0, global_linear * db_multiplier))
+
+
+def _button_volume(index):
+    idx0 = index - 1
+    return button_volumes[idx0] if 0 <= idx0 < len(button_volumes) else 0
+
+
+def _sync_legacy_playback_state():
+    global current_jingle, jingle_playing
+    active = list(playing_channels)
+    jingle_playing = bool(active)
+    current_jingle = active[-1] if active else None
+
+
+def _release_playback(index, channel=None):
+    """Remove mappings only when they still describe the indicated playback."""
+    mapped_channel = playing_channels.get(index)
+    if channel is not None and mapped_channel is not channel:
+        return False
+    playing_channels.pop(index, None)
+    event_type = _events_by_button.pop(index, None)
+    if event_type is not None:
+        _playbacks_by_event.pop(event_type, None)
+    _sync_legacy_playback_state()
+    return mapped_channel is not None
+
+
+def _allocate_end_event(index, channel):
+    global _next_end_event
+    first = int(pygame.USEREVENT) + 1
+    limit = int(getattr(pygame, "NUMEVENTS", first + DEFAULT_BUTTON_COUNT + 1))
+    if _next_end_event is None or not first <= _next_end_event < limit:
+        _next_end_event = first
+    for _ in range(max(0, limit - first)):
+        event_type = _next_end_event
+        _next_end_event += 1
+        if _next_end_event >= limit:
+            _next_end_event = first
+        if event_type not in _playbacks_by_event:
+            _playbacks_by_event[event_type] = (index, channel)
+            _events_by_button[index] = event_type
+            return event_type
+    raise RuntimeError("Keine freie Pygame-Endevent-ID verfügbar.")
+
+
 def play_jingle(index, jingle_path, current_fadeout_duration): # Nimmt fadeout_duration als Argument
-    global sounds # Zugriff auf das globale Dictionary
     if not pygame_available:
         error_message = "Audio-Funktion nicht verfügbar: pygame ist nicht installiert."
         print(error_message)
         return {"error": error_message, "success": False}
 
-    if index in sounds and sounds[index] is not None and sounds[index].get_num_channels() > 0:
-        stop_jingle(index, current_fadeout_duration)
-    else:
-        if jingle_path:
-            file_path = jingle_path
-            file_extension = os.path.splitext(file_path)[1].lower()
-            if file_extension in [".mp3", ".wav"]:
-                try:
-                    if file_path not in sounds: # Sound-Objekt wiederverwenden, falls bereits geladen
-                        sounds[index] = pygame.mixer.Sound(file_path)
-                    sound = sounds[index]
-                    channel = pygame.mixer.find_channel()
-                    if channel:
-                        channel.play(sound)
-                        channel.set_endevent(pygame.USEREVENT + index)
-                        # Apply per-button volume offset (dB) and global volume
-                        try:
-                            db = 0
-                            idx0 = index - 1
-                            if 0 <= idx0 < len(button_volumes):
-                                db = int(button_volumes[idx0])
-                            linear = (10 ** (db / 20.0)) * (int(set_volume) / 100.0)
-                            channel.set_volume(max(0.0, min(1.0, linear)))
-                        except Exception:
-                            try:
-                                channel.set_volume(int(set_volume) / 100.0)
-                            except Exception:
-                                pass
-                        # remember channel for runtime updates
-                        playing_channels[index] = channel
-                        update_indicator_state(index, True) # Aufruf der Logik-Funktion für Indikator-Status
-                        print(f"Spielt Jingle {index}: {os.path.basename(file_path)}")
-                        return {"indicator_update": {"index": index, "playing": True}, "success": True} # Rückmeldung für GUI
-                except pygame.error as e:
-                    error_message = f"Die Datei {file_path} konnte nicht geladen werden: {e}"
-                    print(error_message)
-                    return {"error": error_message, "success": False} # Rückmeldung für GUI
-            else:
-                error_message = f"Das Dateiformat {file_extension} wird nicht unterstützt."
-                print(error_message)
-                return {"error": error_message, "success": False} # Rückmeldung für GUI
-        else:
-            error_message = "Kein Jingle zugewiesen. Bitte wählen Sie eine Datei im Einstellungsmenü."
-            print(error_message)
-            return {"error": error_message, "success": False} # Rückmeldung für GUI
-    return {"success": True} # Rückmeldung für GUI (Stop Jingle Fall)
+    if index in playing_channels:
+        result = stop_jingle(index, current_fadeout_duration)
+        result["success"] = True
+        return result
+    if not jingle_path:
+        error_message = "Kein Jingle zugewiesen. Bitte wählen Sie eine Datei im Einstellungsmenü."
+        return {"error": error_message, "success": False}
+
+    file_path = os.path.normcase(os.path.abspath(os.fspath(jingle_path)))
+    file_extension = os.path.splitext(file_path)[1].lower()
+    if file_extension not in (".mp3", ".wav"):
+        return {"error": f"Das Dateiformat {file_extension} wird nicht unterstützt.", "success": False}
+
+    try:
+        sound = sounds.get(file_path)
+        if sound is None:
+            sound = pygame.mixer.Sound(file_path)
+            sounds[file_path] = sound
+        channel = pygame.mixer.find_channel()
+        if channel is None:
+            return {"error": "Kein freier Audio-Channel verfügbar.", "success": False}
+        event_type = _allocate_end_event(index, channel)
+        try:
+            channel.set_endevent(event_type)
+            channel.set_volume(calculate_effective_volume(set_volume, _button_volume(index)))
+            channel.play(sound)
+        except Exception:
+            _release_playback(index, channel)
+            _playbacks_by_event.pop(event_type, None)
+            _events_by_button.pop(index, None)
+            raise
+        playing_channels[index] = channel
+        _sync_legacy_playback_state()
+        update_indicator_state(index, True)
+        print(f"Spielt Jingle {index}: {os.path.basename(file_path)}")
+        return {"indicator_update": {"index": index, "playing": True}, "success": True}
+    except Exception as e:
+        error_message = f"Die Datei {file_path} konnte nicht geladen oder abgespielt werden: {e}"
+        print(error_message)
+        return {"error": error_message, "success": False}
 
 
 def stop_jingle(index, current_fadeout_duration): # Nimmt fadeout_duration als Argument
@@ -186,15 +259,15 @@ def stop_jingle(index, current_fadeout_duration): # Nimmt fadeout_duration als A
         # Kein Fehler, aber nichts zu tun
         return {}
 
-    if index in sounds and sounds[index] is not None and sounds[index].get_num_channels() > 0:
-        sounds[index].fadeout(current_fadeout_duration)
+    channel = playing_channels.get(index)
+    if channel is not None:
+        try:
+            duration = max(0, int(current_fadeout_duration))
+        except (TypeError, ValueError):
+            duration = 0
+        channel.fadeout(duration)
+        _release_playback(index, channel)
         update_indicator_state(index, False) # Aufruf der Logik-Funktion für Indikator-Status
-        # remove playing channel mapping if present
-        if index in playing_channels:
-            try:
-                del playing_channels[index]
-            except Exception:
-                pass
         print(f"Jingle {index} gestoppt mit Fadeout.")
         return {"indicator_update": {"index": index, "playing": False}} # Rückmeldung für GUI
     return {} # Rückmeldung für GUI (Kein Sound zum stoppen)
@@ -205,10 +278,16 @@ def check_sound_end():
         return []
     ended_indicators = [] # Liste der Indizes, die gestoppt werden müssen
     for event in pygame.event.get():
-        if event.type >= pygame.USEREVENT:
-            index = event.type - pygame.USEREVENT
-            update_indicator_state(index, False) # Logik-Funktion für Indikator-Status
-            ended_indicators.append({"index": index, "playing": False}) # Status-Daten für GUI
+        playback = _playbacks_by_event.get(event.type)
+        if playback is None:
+            continue
+        index, channel = playback
+        if playing_channels.get(index) is not channel:
+            _playbacks_by_event.pop(event.type, None)
+            continue
+        _release_playback(index, channel)
+        update_indicator_state(index, False)
+        ended_indicators.append({"index": index, "playing": False})
     return ended_indicators # Rückmeldung für GUI (Liste von Indikator-Updates)
 
 
@@ -229,12 +308,7 @@ def set_volume_logic(volume_percent):
             # First, update channels we track with per-button multipliers
             for idx, chan in list(playing_channels.items()):
                 try:
-                    db = 0
-                    idx0 = idx - 1
-                    if 0 <= idx0 < len(button_volumes):
-                        db = int(button_volumes[idx0])
-                    linear = (10 ** (db / 20.0)) * global_volume
-                    chan.set_volume(max(0.0, min(1.0, linear)))
+                    chan.set_volume(calculate_effective_volume(volume_percent, _button_volume(idx)))
                 except Exception:
                     pass
             # For any other channels not tracked, set to global volume
@@ -242,7 +316,7 @@ def set_volume_logic(volume_percent):
                 channel = pygame.mixer.Channel(i)
                 if channel not in list(playing_channels.values()):
                     try:
-                        channel.set_volume(global_volume)
+                        channel.set_volume(max(0.0, min(1.0, global_volume)))
                     except Exception:
                         pass
         except Exception as _e:
@@ -289,8 +363,7 @@ def get_current_settings():
         "fadeout_duration": fadeout_duration,
         "button_height": button_height,
         "window_size": window_size[:],
-        "volume": set_volume
-        ,
+        "volume": set_volume,
         "last_folder": settings.get("last_folder", str(Path.home()))
     }
 
@@ -354,8 +427,7 @@ def set_button_volume(index, db_value):
     if pygame_available and index in playing_channels and playing_channels[index] is not None:
         try:
             chan = playing_channels[index]
-            linear = (10 ** (db / 20.0)) * (int(set_volume) / 100.0)
-            chan.set_volume(max(0.0, min(1.0, linear)))
+            chan.set_volume(calculate_effective_volume(set_volume, db))
         except Exception as _e:
             print(f"Warnung: Konnte Volume für laufenden Channel nicht setzen: {_e}")
 

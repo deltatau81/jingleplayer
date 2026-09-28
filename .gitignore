@@ -1,0 +1,28 @@
+# Python bytecode and test output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local virtual environments
+.venv/
+venv/
+
+# Local Jingleplayer user data and audio
+.jingleplayer/
+jingleplayer_settings.json
+*.mp3
+*.wav
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+~$*
+
+# Build and PyInstaller output
+build/
+dist/
+*.manifest
