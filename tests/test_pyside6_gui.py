@@ -755,22 +755,127 @@ def test_saved_edit_is_visible_after_reopen_restart_and_close(
     restarted_window.close()
 
 
-def test_fadeout_control_loads_settings_without_saving(qt_app, isolated_settings):
+def test_settings_button_replaces_main_window_fadeout_control(qt_app, isolated_settings):
     _, _, saved_settings = isolated_settings
 
     window = gui.create_main_window()
 
-    assert window.fadeout_spin.minimum() == 0
-    assert window.fadeout_spin.maximum() == gui.MAX_FADEOUT_DURATION_MS
-    assert window.fadeout_spin.singleStep() == 1
-    assert window.fadeout_spin.suffix() == " ms"
-    assert window.fadeout_spin.value() == 750
+    assert window.settings_button.text() == "Einstellungen"
+    assert not hasattr(window, "fadeout_spin")
     assert window.fadeout_duration == 750
     assert saved_settings == []
     window.close()
 
 
-def test_fadeout_change_updates_complete_settings_without_audio_or_tile_changes(
+def test_settings_dialog_shows_fadeout_and_read_only_layout_values(qt_app):
+    dialog = gui.SettingsDialog(750, [8, 5, 6, 4, 9], 3)
+
+    assert dialog.windowTitle() == "Einstellungen"
+    assert dialog.fadeout_spin.minimum() == 0
+    assert dialog.fadeout_spin.maximum() == gui.MAX_FADEOUT_DURATION_MS
+    assert dialog.fadeout_spin.singleStep() == 1
+    assert dialog.fadeout_spin.suffix() == " ms"
+    assert dialog.fadeout_spin.value() == 750
+    assert len(dialog.per_row_spins) == 5
+    assert [spin.value() for spin in dialog.per_row_spins] == [8, 5, 6, 4, 9]
+    assert all(spin.minimum() == 0 for spin in dialog.per_row_spins)
+    assert all(spin.maximum() == 10 for spin in dialog.per_row_spins)
+    assert all(not spin.isEnabled() for spin in dialog.per_row_spins)
+    assert dialog.button_height_spin.value() == 3
+    assert not dialog.button_height_spin.isEnabled()
+    dialog.reject()
+
+
+def test_settings_button_opens_modal_dialog(qt_app, isolated_settings, monkeypatch):
+    received = []
+
+    class DialogProbe:
+        def __init__(self, fadeout, per_row, button_height, parent):
+            received.append((fadeout, per_row, button_height, parent))
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "SettingsDialog", DialogProbe)
+    window = gui.create_main_window()
+
+    window.settings_button.click()
+
+    assert received == [(750, [2, 0, 0, 0, 0], 3, window)]
+    window.close()
+
+
+def test_cancelled_settings_dialog_changes_nothing(qt_app, isolated_settings, monkeypatch):
+    settings, _, saved_settings = isolated_settings
+    original_settings = deepcopy(settings)
+
+    class RejectedDialog:
+        def __init__(self, *args):
+            self.fadeout_spin = type("Value", (), {"value": lambda self: 2500})()
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "SettingsDialog", RejectedDialog)
+    window = gui.create_main_window()
+    original_states = [tile.playing for tile in window.jingle_tiles]
+
+    window._open_settings_dialog()
+
+    assert settings == original_settings
+    assert window.fadeout_duration == 750
+    assert [tile.playing for tile in window.jingle_tiles] == original_states
+    assert saved_settings == []
+    window.close()
+
+
+def test_settings_dialog_save_accepts_while_escape_and_close_reject(qt_app):
+    accepted_dialog = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+    save_button = accepted_dialog.button_box.button(gui.QDialogButtonBox.StandardButton.Save)
+
+    save_button.click()
+
+    assert accepted_dialog.result() == gui.QDialog.DialogCode.Accepted
+
+    escape_dialog = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+    escape_dialog.show()
+    qt_app.processEvents()
+    QTest.keyClick(escape_dialog, Qt.Key.Key_Escape)
+    assert escape_dialog.result() == gui.QDialog.DialogCode.Rejected
+
+    close_dialog = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+    close_dialog.show()
+    qt_app.processEvents()
+    close_dialog.close()
+    assert close_dialog.result() == gui.QDialog.DialogCode.Rejected
+
+
+def test_accepted_settings_dialog_saves_only_fadeout(qt_app, isolated_settings, monkeypatch):
+    settings, _, saved_settings = isolated_settings
+    original_per_row = list(settings["buttons"]["per_row"])
+    original_height = settings["button_height"]
+
+    class AcceptedDialog:
+        def __init__(self, *args):
+            self.fadeout_spin = type("Value", (), {"value": lambda self: 2500})()
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(gui, "SettingsDialog", AcceptedDialog)
+    window = gui.create_main_window()
+
+    window._open_settings_dialog()
+
+    assert window.fadeout_duration == 2500
+    assert settings["fadeout_duration"] == 2500
+    assert settings["buttons"]["per_row"] == original_per_row
+    assert settings["button_height"] == original_height
+    assert len(saved_settings) == 1
+    window.close()
+
+
+def test_saved_settings_dialog_updates_only_fadeout_without_audio_or_tile_changes(
     qt_app, isolated_settings, mocked_audio
 ):
     settings, _, saved_settings = isolated_settings
@@ -780,7 +885,7 @@ def test_fadeout_change_updates_complete_settings_without_audio_or_tile_changes(
     window.jingle_tiles[0].set_playing(True)
     original_tile_style = window.jingle_tiles[0].styleSheet()
 
-    window.fadeout_spin.setValue(2500)
+    window._save_fadeout_duration(2500)
 
     assert window.fadeout_duration == 2500
     assert settings["fadeout_duration"] == 2500
@@ -799,7 +904,7 @@ def test_play_and_stop_use_changed_fadeout(qt_app, isolated_settings, mocked_aud
     window = gui.create_main_window()
     play_calls, stop_calls = mocked_audio
 
-    window.fadeout_spin.setValue(2500)
+    window._save_fadeout_duration(2500)
     window.jingle_tiles[0].clicked.emit(1)
     window.jingle_tiles[0].clicked.emit(1)
 
@@ -812,7 +917,7 @@ def test_changed_fadeout_survives_close_and_simulated_restart(qt_app, isolated_s
     settings, _, saved_settings = isolated_settings
     first_window = gui.create_main_window()
 
-    first_window.fadeout_spin.setValue(1800)
+    first_window._save_fadeout_duration(1800)
     first_window.close()
     saved_after_close = deepcopy(saved_settings[-1])
 
@@ -821,5 +926,4 @@ def test_changed_fadeout_survives_close_and_simulated_restart(qt_app, isolated_s
     assert settings["fadeout_duration"] == 1800
     assert saved_after_close["fadeout_duration"] == 1800
     assert restarted_window.fadeout_duration == 1800
-    assert restarted_window.fadeout_spin.value() == 1800
     restarted_window.close()

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -216,6 +217,52 @@ class JingleEditDialog(QDialog):
         }
 
 
+class SettingsDialog(QDialog):
+    """Application settings with layout controls prepared for Phase 8B."""
+
+    def __init__(self, fadeout_duration, per_row, button_height, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Einstellungen")
+
+        audio_group = QGroupBox("Audio", self)
+        audio_layout = QFormLayout(audio_group)
+        self.fadeout_spin = QSpinBox(audio_group)
+        self.fadeout_spin.setRange(0, MAX_FADEOUT_DURATION_MS)
+        self.fadeout_spin.setSingleStep(1)
+        self.fadeout_spin.setSuffix(" ms")
+        self.fadeout_spin.setValue(int(fadeout_duration))
+        audio_layout.addRow("Fadeout", self.fadeout_spin)
+
+        layout_group = QGroupBox("Layout", self)
+        layout_form = QFormLayout(layout_group)
+        self.per_row_spins = []
+        for row_index in range(jingleplayer_logic.DEFAULT_BUTTON_ROW_COUNT):
+            row_spin = QSpinBox(layout_group)
+            row_spin.setRange(0, jingleplayer_logic.DEFAULT_BUTTONS_PER_ROW_COUNT)
+            row_spin.setValue(int(per_row[row_index]))
+            row_spin.setEnabled(False)
+            layout_form.addRow(f"Jingles in Reihe {row_index + 1}", row_spin)
+            self.per_row_spins.append(row_spin)
+
+        self.button_height_spin = QSpinBox(layout_group)
+        self.button_height_spin.setRange(1, 2_147_483_647)
+        self.button_height_spin.setValue(int(button_height))
+        self.button_height_spin.setEnabled(False)
+        layout_form.addRow("Button-/Tilehöhe", self.button_height_spin)
+
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+
+        dialog_layout = QVBoxLayout(self)
+        dialog_layout.addWidget(audio_group)
+        dialog_layout.addWidget(layout_group)
+        dialog_layout.addWidget(self.button_box)
+
+
 class JingleplayerMainWindow(QMainWindow):
     """Minimal main window backed by the existing Jingleplayer settings."""
 
@@ -270,19 +317,12 @@ class JingleplayerMainWindow(QMainWindow):
         self.volume_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         volume_layout.addWidget(self.volume_value_label)
 
-        fadeout_label = QLabel("Fadeout", central_widget)
-        volume_layout.addWidget(fadeout_label)
-
-        self.fadeout_spin = QSpinBox(central_widget)
-        self.fadeout_spin.setRange(0, MAX_FADEOUT_DURATION_MS)
-        self.fadeout_spin.setSingleStep(1)
-        self.fadeout_spin.setSuffix(" ms")
-        self.fadeout_spin.setValue(int(current_settings["fadeout_duration"]))
-        volume_layout.addWidget(self.fadeout_spin)
+        self.settings_button = QPushButton("Einstellungen", central_widget)
+        self.settings_button.clicked.connect(self._open_settings_dialog)
+        volume_layout.addWidget(self.settings_button)
         main_layout.addLayout(volume_layout)
 
         self.volume_slider.valueChanged.connect(self._handle_volume_change)
-        self.fadeout_spin.valueChanged.connect(self._handle_fadeout_change)
 
         button_settings = current_settings.get("buttons", {})
         texts = button_settings.get("texts", [])
@@ -391,7 +431,19 @@ class JingleplayerMainWindow(QMainWindow):
         jingleplayer_logic.set_volume_logic(volume_percent)
         jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
 
-    def _handle_fadeout_change(self, fadeout_duration):
+    def _open_settings_dialog(self):
+        current_settings = jingleplayer_logic.get_current_settings()
+        dialog = SettingsDialog(
+            current_settings["fadeout_duration"],
+            current_settings["buttons"]["per_row"],
+            current_settings["button_height"],
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._save_fadeout_duration(dialog.fadeout_spin.value())
+
+    def _save_fadeout_duration(self, fadeout_duration):
         current_settings = jingleplayer_logic.get_current_settings()
         button_settings = current_settings["buttons"]
         jingleplayer_logic.update_settings_data(
