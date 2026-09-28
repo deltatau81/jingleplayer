@@ -5,7 +5,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFrame  # noqa: E402
 
 import jingleplayer_gui_pyside6 as gui  # noqa: E402
 
@@ -83,3 +84,87 @@ def test_closing_saves_size_without_changing_other_settings(qt_app, isolated_set
     expected_settings = deepcopy(original_settings)
     expected_settings["window_size"] = [900, 640]
     assert saved_settings[0] == expected_settings
+
+
+def test_per_row_creates_32_tiles_in_five_explicit_rows(qt_app, isolated_settings):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["per_row"] = [8, 5, 6, 4, 9]
+    settings["buttons"]["texts"] = [f"Jingle {index}" for index in range(32)]
+    settings["buttons"]["colors"] = ["#0080ff"] * 32
+
+    window = gui.create_main_window()
+
+    assert len(window.row_layouts) == 5
+    assert len(window.jingle_tiles) == 32
+    assert [layout.count() for layout in window.row_layouts] == [8, 5, 6, 4, 9]
+
+    window.close()
+    qt_app.processEvents()
+
+
+def test_zero_button_rows_remain_present(qt_app, isolated_settings):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["per_row"] = [2, 0, 1, 0, 2]
+    settings["buttons"]["texts"] = [f"Jingle {index}" for index in range(5)]
+    settings["buttons"]["colors"] = ["#00ff00"] * 5
+
+    window = gui.create_main_window()
+
+    assert len(window.row_layouts) == 5
+    assert len(window.jingle_tiles) == 5
+    assert [layout.count() for layout in window.row_layouts] == [2, 0, 1, 0, 2]
+
+    window.close()
+    qt_app.processEvents()
+
+
+def test_tiles_use_saved_texts_and_colors(qt_app, isolated_settings):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["per_row"] = [2, 0, 0, 0, 0]
+    settings["buttons"]["texts"] = ["Sweet Caroline", "völlig losgelöst"]
+    settings["buttons"]["colors"] = ["#0080ff", "#ffff00"]
+
+    window = gui.create_main_window()
+
+    assert [tile.label.text() for tile in window.jingle_tiles] == ["Sweet Caroline", "völlig losgelöst"]
+    assert [tile.jingle_color for tile in window.jingle_tiles] == ["#0080ff", "#ffff00"]
+    assert "background-color: #0080ff" in window.jingle_tiles[0].styleSheet()
+    assert window.jingle_tiles[0].label.styleSheet().startswith("color: #ffffff")
+    assert window.jingle_tiles[1].label.styleSheet().startswith("color: #111111")
+
+    window.close()
+    qt_app.processEvents()
+
+
+def test_tiles_use_a_styled_frame_for_reliable_background_painting(qt_app, isolated_settings):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["per_row"] = [1, 0, 0, 0, 0]
+    settings["buttons"]["texts"] = ["Visible card"]
+    settings["buttons"]["colors"] = ["#0080ff"]
+
+    window = gui.create_main_window()
+    tile = window.jingle_tiles[0]
+
+    assert isinstance(tile, QFrame)
+    assert tile.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+    assert "QFrame#jingleTile" in tile.styleSheet()
+
+    window.close()
+    qt_app.processEvents()
+
+
+def test_incomplete_text_and_color_lists_are_handled_defensively(qt_app, isolated_settings):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["per_row"] = [2, 2, 0, 0, 0]
+    settings["buttons"]["texts"] = ["Only complete entry", "Missing color"]
+    settings["buttons"]["colors"] = ["#ff0000"]
+
+    window = gui.create_main_window()
+
+    assert len(window.row_layouts) == 5
+    assert len(window.jingle_tiles) == 1
+    assert [layout.count() for layout in window.row_layouts] == [1, 0, 0, 0, 0]
+    assert window.jingle_tiles[0].label.text() == "Only complete entry"
+
+    window.close()
+    qt_app.processEvents()
