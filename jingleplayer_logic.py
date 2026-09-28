@@ -81,11 +81,35 @@ def check_and_set_defaults(loaded_settings, default_settings):
             loaded_settings[key] = value
     return loaded_settings
 
+
+def _default_button_texts():
+    return [f"Jingle {index}" for index in range(1, DEFAULT_BUTTON_COUNT + 1)]
+
+
+def _normalize_button_slots(values, defaults):
+    normalized = list(values) if isinstance(values, list) else []
+    normalized = normalized[:DEFAULT_BUTTON_COUNT]
+    if len(normalized) < DEFAULT_BUTTON_COUNT:
+        normalized.extend(defaults[len(normalized):DEFAULT_BUTTON_COUNT])
+    return normalized
+
+
+def _normalize_buttons_per_row(per_row):
+    if not isinstance(per_row, list) or len(per_row) != DEFAULT_BUTTON_ROW_COUNT:
+        return [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT
+    try:
+        normalized = [max(0, min(DEFAULT_BUTTONS_PER_ROW_COUNT, int(value))) for value in per_row]
+    except (TypeError, ValueError):
+        return [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT
+    if sum(normalized) == 0:
+        return [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT
+    return normalized
+
 # Einstellungen laden
 def load_settings():
     default_settings = {
         "buttons": {
-            "texts": [f"Jingle {i}" for i in range(1, DEFAULT_BUTTON_COUNT + 1)],
+            "texts": _default_button_texts(),
             "colors": ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT,
             "paths": [""] * DEFAULT_BUTTON_COUNT,
             "volumes": [0] * DEFAULT_BUTTON_COUNT,
@@ -105,33 +129,14 @@ def load_settings():
             # remove leftover background_image key if present (feature removed)
             if 'background_image' in loaded_settings:
                 loaded_settings.pop('background_image', None)
-            # Ensure per_row is always a list of length DEFAULT_BUTTON_ROW_COUNT and not empty
-            if ("per_row" not in loaded_settings["buttons"] or
-                not isinstance(loaded_settings["buttons"]["per_row"], list) or
-                len(loaded_settings["buttons"]["per_row"]) != DEFAULT_BUTTON_ROW_COUNT or
-                sum(loaded_settings["buttons"]["per_row"]) == 0):
-                loaded_settings["buttons"]["per_row"] = [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT
-            # Ensure at least 1 button in first row
-            if loaded_settings["buttons"]["per_row"][0] < 1:
-                loaded_settings["buttons"]["per_row"][0] = 1
-            # Ensure lists match the number of buttons
-            total_buttons = sum(loaded_settings["buttons"]["per_row"])
-            for key in ["texts", "colors", "paths"]:
-                while len(loaded_settings["buttons"][key]) < total_buttons:
-                    if key == "colors":
-                        loaded_settings["buttons"][key].append("SystemButtonFace")
-                    else:
-                        loaded_settings["buttons"][key].append("")
-                while len(loaded_settings["buttons"][key]) > total_buttons:
-                    loaded_settings["buttons"][key].pop()
-            # volumes list
-            if "volumes" not in loaded_settings["buttons"] or not isinstance(loaded_settings["buttons"]["volumes"], list):
-                loaded_settings["buttons"]["volumes"] = [0] * total_buttons
-            else:
-                while len(loaded_settings["buttons"]["volumes"]) < total_buttons:
-                    loaded_settings["buttons"]["volumes"].append(0)
-                while len(loaded_settings["buttons"]["volumes"]) > total_buttons:
-                    loaded_settings["buttons"]["volumes"].pop()
+            buttons = loaded_settings["buttons"]
+            buttons["per_row"] = _normalize_buttons_per_row(buttons.get("per_row"))
+            buttons["texts"] = _normalize_button_slots(buttons.get("texts"), _default_button_texts())
+            buttons["colors"] = _normalize_button_slots(
+                buttons.get("colors"), ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT
+            )
+            buttons["paths"] = _normalize_button_slots(buttons.get("paths"), [""] * DEFAULT_BUTTON_COUNT)
+            buttons["volumes"] = _normalize_button_slots(buttons.get("volumes"), [0] * DEFAULT_BUTTON_COUNT)
             return loaded_settings
         except FileNotFoundError: # Spezifischere Exception Behandlung
             print(f"Einstellungsdatei {settings_file} nicht gefunden. Standardeinstellungen werden verwendet.")
@@ -369,34 +374,12 @@ def get_current_settings():
 
 def update_settings_data(texts, colors, paths, per_row, f_duration, b_height, w_size, vol):
     global button_texts, button_colors, jingle_paths, buttons_per_row, fadeout_duration, button_height, set_volume, settings
-    # Ensure at least 1 button in first row
-    if per_row and per_row[0] < 1:
-        per_row[0] = 1
-    total_buttons = sum(per_row)
-    # Adjust lists to match the new total_buttons count
-    if len(texts) < total_buttons:
-        texts += [f"Jingle {i+1}" for i in range(len(texts), total_buttons)]
-    elif len(texts) > total_buttons:
-        texts = texts[:total_buttons]
-    if len(colors) < total_buttons:
-        colors += ["SystemButtonFace"] * (total_buttons - len(colors))
-    elif len(colors) > total_buttons:
-        colors = colors[:total_buttons]
-    if len(paths) < total_buttons:
-        paths += [""] * (total_buttons - len(paths))
-    elif len(paths) > total_buttons:
-        paths = paths[:total_buttons]
-
-    button_texts = texts
-    button_colors = colors
-    jingle_paths = paths
-    # Adjust volumes list to match new total_buttons count while preserving existing values
+    button_texts = _normalize_button_slots(texts, _default_button_texts())
+    button_colors = _normalize_button_slots(colors, ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT)
+    jingle_paths = _normalize_button_slots(paths, [""] * DEFAULT_BUTTON_COUNT)
     global button_volumes
-    if len(button_volumes) < total_buttons:
-        button_volumes += [0] * (total_buttons - len(button_volumes))
-    elif len(button_volumes) > total_buttons:
-        button_volumes = button_volumes[:total_buttons]
-    buttons_per_row = per_row
+    button_volumes = _normalize_button_slots(button_volumes, [0] * DEFAULT_BUTTON_COUNT)
+    buttons_per_row = _normalize_buttons_per_row(per_row)
     fadeout_duration = f_duration
     button_height = b_height
     set_volume = vol

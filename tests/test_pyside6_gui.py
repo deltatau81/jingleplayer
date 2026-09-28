@@ -141,6 +141,21 @@ def test_per_row_creates_32_tiles_in_five_explicit_rows(qt_app, isolated_setting
     qt_app.processEvents()
 
 
+def test_fifty_slots_with_reduced_layout_show_only_requested_tiles(qt_app, isolated_settings):
+    settings, _, _ = isolated_settings
+    settings["buttons"]["per_row"] = [2, 0, 0, 0, 0]
+    settings["buttons"]["texts"] = [f"Jingle {index}" for index in range(50)]
+    settings["buttons"]["colors"] = ["#0080ff"] * 50
+    settings["buttons"]["paths"] = [""] * 50
+    settings["buttons"]["volumes"] = [0] * 50
+
+    window = gui.create_main_window()
+
+    assert len(window.jingle_tiles) == 2
+    assert [layout.count() for layout in window.row_layouts] == [2, 0, 0, 0, 0]
+    window.close()
+
+
 def test_zero_button_rows_remain_present(qt_app, isolated_settings):
     settings, _, _ = isolated_settings
     settings["buttons"]["per_row"] = [2, 0, 1, 0, 2]
