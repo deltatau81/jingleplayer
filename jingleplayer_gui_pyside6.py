@@ -7,12 +7,20 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QColorDialog,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
+    QPushButton,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -42,6 +50,7 @@ class JingleTile(QFrame):
     """Clickable visual representation of one configured jingle."""
 
     clicked = Signal(int)
+    edit_requested = Signal(int)
 
     def __init__(self, index, text, background_color, parent=None):
         super().__init__(parent)
@@ -94,7 +103,89 @@ class JingleTile(QFrame):
             self.clicked.emit(self.jingle_index)
             event.accept()
             return
+        if event.button() == Qt.MouseButton.RightButton and self.rect().contains(event.position().toPoint()):
+            self.edit_requested.emit(self.jingle_index)
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
+
+
+class JingleEditDialog(QDialog):
+    """Temporary, read-only-to-settings editor prepared for Phase 6B."""
+
+    def __init__(self, text, color, path, volume_db, last_folder, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Jingle bearbeiten")
+        self.color_value = str(color)
+        self.last_folder = str(last_folder)
+
+        form_layout = QFormLayout()
+
+        self.name_edit = QLineEdit(str(text), self)
+        form_layout.addRow("Name", self.name_edit)
+
+        path_widget = QWidget(self)
+        path_layout = QHBoxLayout(path_widget)
+        path_layout.setContentsMargins(0, 0, 0, 0)
+        self.path_edit = QLineEdit(str(path), path_widget)
+        self.browse_button = QPushButton("Durchsuchen...", path_widget)
+        self.browse_button.clicked.connect(self._browse_audio_file)
+        path_layout.addWidget(self.path_edit, 1)
+        path_layout.addWidget(self.browse_button)
+        form_layout.addRow("Audiodatei", path_widget)
+
+        self.color_button = QPushButton(self.color_value, self)
+        self.color_button.clicked.connect(self._choose_color)
+        self._update_color_preview()
+        form_layout.addRow("Farbe", self.color_button)
+
+        self.volume_spin = QSpinBox(self)
+        self.volume_spin.setRange(-10, 10)
+        self.volume_spin.setSuffix(" dB")
+        self.volume_spin.setValue(int(volume_db))
+        form_layout.addRow("Individuelle Lautstärke", self.volume_spin)
+
+        self.button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        self.save_button = self.button_box.button(QDialogButtonBox.StandardButton.Save)
+        self.save_button.setText("Speichern")
+        self.save_button.setEnabled(False)
+        self.cancel_button = self.button_box.button(QDialogButtonBox.StandardButton.Cancel)
+        self.cancel_button.setText("Abbrechen")
+        self.button_box.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form_layout)
+        layout.addWidget(self.button_box)
+
+    def _browse_audio_file(self):
+        selected_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Audiodatei auswählen",
+            self.last_folder,
+            "Audiodateien (*.mp3 *.wav)",
+        )
+        if selected_path:
+            self.path_edit.setText(selected_path)
+
+    def _choose_color(self):
+        initial_color = QColor(self.color_value)
+        selected_color = QColorDialog.getColor(initial_color, self, "Jingle-Farbe auswählen")
+        if selected_color.isValid():
+            self.color_value = selected_color.name()
+            self._update_color_preview()
+
+    def _update_color_preview(self):
+        display_color = QColor(self.color_value)
+        if not display_color.isValid():
+            display_color = QColor("#f0f0f0")
+        self.color_button.setText(self.color_value)
+        self.color_button.setStyleSheet(
+            f"background-color: {display_color.name()};"
+            f"color: {contrasting_text_color(display_color.name())};"
+        )
 
 
 class JingleplayerMainWindow(QMainWindow):
@@ -115,7 +206,11 @@ class JingleplayerMainWindow(QMainWindow):
         self.row_layouts = []
         self.jingle_tiles = []
         button_settings = current_settings.get("buttons", {})
+        self.jingle_texts = button_settings.get("texts", [])
+        self.jingle_colors = button_settings.get("colors", [])
         self.jingle_paths = button_settings.get("paths", [])
+        self.jingle_volumes = button_settings.get("volumes", [])
+        self.last_folder = current_settings.get("last_folder", "")
         self.fadeout_duration = current_settings.get("fadeout_duration", 0)
         self._build_jingle_layout(current_settings)
 
@@ -175,6 +270,7 @@ class JingleplayerMainWindow(QMainWindow):
                     break
                 tile = JingleTile(next_index + 1, texts[next_index], colors[next_index], row_widget)
                 tile.clicked.connect(self._handle_tile_click)
+                tile.edit_requested.connect(self._open_jingle_editor)
                 row_layout.addWidget(tile, 1)
                 self.jingle_tiles.append(tile)
                 next_index += 1
@@ -198,6 +294,18 @@ class JingleplayerMainWindow(QMainWindow):
         result = jingleplayer_logic.play_jingle(index, jingle_path, self.fadeout_duration)
         if result and result.get("success") is True:
             tile.set_playing(True)
+
+    def _open_jingle_editor(self, index):
+        list_index = index - 1
+        dialog = JingleEditDialog(
+            self.jingle_texts[list_index],
+            self.jingle_colors[list_index],
+            self.jingle_paths[list_index],
+            self.jingle_volumes[list_index],
+            self.last_folder,
+            self,
+        )
+        dialog.exec()
 
     def _poll_sound_end(self):
         indicator_updates = jingleplayer_logic.check_sound_end()

@@ -392,3 +392,140 @@ def test_changed_global_volume_is_loaded_after_simulated_restart(
     assert restarted_window.volume_slider.value() == 37
     assert restarted_window.volume_value_label.text() == "37 %"
     restarted_window.close()
+
+
+def test_right_click_requests_edit_without_left_click(qt_app):
+    tile = gui.JingleTile(7, "Jingle", "#0080ff")
+    clicked_indices = []
+    edited_indices = []
+    tile.clicked.connect(clicked_indices.append)
+    tile.edit_requested.connect(edited_indices.append)
+    tile.show()
+    qt_app.processEvents()
+
+    QTest.mouseClick(tile, Qt.MouseButton.RightButton)
+
+    assert edited_indices == [7]
+    assert clicked_indices == []
+    tile.close()
+
+
+@pytest.mark.parametrize(
+    ("index", "expected"),
+    [
+        (1, ("A", "red", "a.wav", -3, "C:/Jingles")),
+        (2, ("B", "blue", "b.mp3", 4, "C:/Jingles")),
+    ],
+)
+def test_editor_receives_values_for_requested_one_based_index(
+    qt_app, isolated_settings, monkeypatch, index, expected
+):
+    received = []
+
+    class DialogProbe:
+        def __init__(self, text, color, path, volume_db, last_folder, parent):
+            received.append((text, color, path, volume_db, last_folder))
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "JingleEditDialog", DialogProbe)
+    window = gui.create_main_window()
+
+    window._open_jingle_editor(index)
+
+    assert received == [expected]
+    window.close()
+
+
+def test_edit_dialog_loads_all_values_and_disables_save(qt_app):
+    dialog = gui.JingleEditDialog("Tor", "#0080ff", "C:/Audio/tor.wav", -6, "C:/Audio")
+
+    assert dialog.windowTitle() == "Jingle bearbeiten"
+    assert dialog.name_edit.text() == "Tor"
+    assert dialog.color_value == "#0080ff"
+    assert "background-color: #0080ff" in dialog.color_button.styleSheet()
+    assert dialog.path_edit.text() == "C:/Audio/tor.wav"
+    assert dialog.volume_spin.minimum() == -10
+    assert dialog.volume_spin.maximum() == 10
+    assert dialog.volume_spin.value() == -6
+    assert dialog.volume_spin.suffix() == " dB"
+    assert not dialog.save_button.isEnabled()
+
+    dialog.reject()
+
+
+def test_rejected_dialog_changes_no_settings_or_tile(qt_app, isolated_settings):
+    settings, _, saved_settings = isolated_settings
+    original_settings = deepcopy(settings)
+    window = gui.create_main_window()
+    tile = window.jingle_tiles[0]
+    original_style = tile.styleSheet()
+    original_paths = list(window.jingle_paths)
+    dialog = gui.JingleEditDialog("A", "red", "a.wav", -3, "C:/Jingles", window)
+
+    dialog.name_edit.setText("Changed")
+    dialog.path_edit.setText("changed.mp3")
+    dialog.color_value = "#00ff00"
+    dialog._update_color_preview()
+    dialog.volume_spin.setValue(10)
+    dialog.reject()
+
+    assert settings == original_settings
+    assert saved_settings == []
+    assert tile.label.text() == "A"
+    assert tile.styleSheet() == original_style
+    assert window.jingle_paths == original_paths
+    window.close()
+
+
+def test_file_dialog_changes_only_temporary_path(qt_app, monkeypatch):
+    dialog = gui.JingleEditDialog("A", "red", "old.wav", 0, "C:/Start")
+    calls = []
+
+    def choose_file(parent, title, directory, file_filter):
+        calls.append((title, directory, file_filter))
+        return ("C:/Other/new.mp3", file_filter)
+
+    monkeypatch.setattr(gui.QFileDialog, "getOpenFileName", choose_file)
+
+    dialog._browse_audio_file()
+
+    assert calls == [("Audiodatei auswählen", "C:/Start", "Audiodateien (*.mp3 *.wav)")]
+    assert dialog.path_edit.text() == "C:/Other/new.mp3"
+    assert dialog.last_folder == "C:/Start"
+    dialog.reject()
+
+
+def test_color_dialog_changes_only_temporary_color(qt_app, monkeypatch):
+    dialog = gui.JingleEditDialog("A", "#ff0000", "a.wav", 0, "C:/Start")
+
+    monkeypatch.setattr(
+        gui.QColorDialog,
+        "getColor",
+        lambda initial, parent, title: gui.QColor("#00ff00"),
+    )
+
+    dialog._choose_color()
+
+    assert dialog.color_value == "#00ff00"
+    assert "background-color: #00ff00" in dialog.color_button.styleSheet()
+    dialog.reject()
+
+
+def test_escape_and_window_close_reject_edit_dialog(qt_app):
+    escape_dialog = gui.JingleEditDialog("A", "red", "a.wav", 0, "C:/Start")
+    escape_dialog.show()
+    qt_app.processEvents()
+
+    QTest.keyClick(escape_dialog, Qt.Key.Key_Escape)
+
+    assert escape_dialog.result() == gui.QDialog.DialogCode.Rejected
+
+    close_dialog = gui.JingleEditDialog("A", "red", "a.wav", 0, "C:/Start")
+    close_dialog.show()
+    qt_app.processEvents()
+
+    close_dialog.close()
+
+    assert close_dialog.result() == gui.QDialog.DialogCode.Rejected
