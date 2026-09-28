@@ -1,74 +1,201 @@
-Jingleplayer
+# Jingleplayer
 
-Overview
+Jingleplayer is a desktop application for playing audio jingles using configurable buttons. It supports MP3 and WAV files and provides a graphical user interface based on Tkinter.
 
-Jingleplayer is an application for playing audio jingles (MP3, WAV) with a user-friendly graphical user interface (GUI). The software is based on Python, uses Pygame for audio playback and Tkinter for the user interface.
+The application is written in Python and uses pygame for audio playback.
 
-Updated with separate GUI and logic
+## Project structure
 
+The application is separated into GUI and application logic:
 
-Functions
+- `jingleplayer_gui_tkinter.py` – Tkinter graphical user interface
+- `jingleplayer_logic.py` – audio playback, settings and application logic
+- `HELP.md` – German user manual
+- `AUDIO_ENGINE.md` – technical documentation of the audio engine
 
-Link any audio files (*.mp3, *.wav) to buttons
+## Features
 
-Customizable button texts, colors and number of buttons per row
+### Jingle buttons
 
-Volume control via a slider
+- Up to 40 configurable jingle buttons
+- Four configurable button rows
+- 0–10 buttons per row
+- MP3 and WAV playback
+- Custom text for every button
+- Custom button colors
+- Individual audio file assignment
+- Right-click configuration dialog
+- Playback status indicators
+- Individual volume control for each button
 
-Fadeout function when stopping a jingle
+A left-click starts the assigned jingle.
 
-Indicators for displaying the playback status
+Clicking an already playing button again stops that jingle using the configured fadeout.
 
-Settings menu for editing the button properties
+Multiple jingles can play simultaneously and are handled independently.
 
-Settings are saved automatically
+### Audio engine
 
-Installation
+The audio engine is based on `pygame.mixer`.
 
-Prerequisites
+The current implementation provides:
 
-Python 3.7 or higher
+- Dedicated mixer channels for active buttons
+- Up to 50 configured mixer channels
+- Independent playback of multiple jingles
+- Independent playback even when the same audio file is used by multiple buttons
+- Channel-specific fadeout
+- Automatic detection of natural playback completion
+- Sound caching by normalized file path
+- Cleanup of finished playback state
 
-The following Python libraries:
+The mixer is initialized with:
 
-pip install pygame
+- 44.1 kHz sample rate
+- 16-bit audio
+- Stereo output
+- 512 sample buffer
 
-Installation & Start
+For technical details see `AUDIO_ENGINE.md`.
 
-Download the repository or copy the Python file.
+### Volume control
 
-Start the program with:
+Jingleplayer provides two levels of volume control.
 
-python jingleplayer.py
+**Global volume**
 
-Operation
+The slider in the main window controls the overall playback volume from 0–100%.
 
-Assign jingles: Right-click on a button → Select file.
+**Individual button volume**
 
-Button settings: Adjust color, name and jingle via the context menu.
+Each jingle button has an individual volume adjustment from -10 dB to +10 dB.
 
-Start jingle: Left-click on a button.
+Changes to the individual volume are also applied to an already running playback channel.
 
-Stop jingle: Left-click again or another jingle is started.
+### Fadeout
 
-Change settings: Open the “Settings” menu and make adjustments.
+When a playing button is stopped, the configured fadeout is applied only to that button's playback channel.
 
-Volume: Adjust using the upper slider.
+Other simultaneously playing jingles continue playing.
 
-Saving the settings
+The fadeout duration can be configured in milliseconds.
 
-The configuration is saved in a JSON file in the user directory:
+### Graphical user interface
 
-~/.jingleplayer/jingleplayer_settings.json
+The GUI provides:
 
-If the directory is not writable, an alternative directory in the current working directory is used.
+- Configurable button layout
+- Playback status indicators
+- Global volume slider
+- Individual button volume sliders
+- Settings dialog
+- Right-click button editor
+- Saved window size
+- Splash screen during application startup
 
-License
+The main window remains hidden while the interface is constructed. This avoids partially rendered controls being visible during startup.
 
-This project is licensed under the MIT license.
+### Persistent settings
 
-Author
+Settings are stored in a JSON file.
 
-Developed by Young Crashers Chemnitz.
+The default location is:
 
- 
+`~/.jingleplayer/jingleplayer_settings.json`
+
+On Windows this normally corresponds to:
+
+`C:\Users\<username>\.jingleplayer\jingleplayer_settings.json`
+
+If the normal user directory cannot be used, Jingleplayer can use a fallback data directory.
+
+Stored settings include:
+
+- Button texts
+- Button colors
+- Audio file paths
+- Buttons per row
+- Global volume
+- Individual button volumes
+- Fadeout duration
+- Button height
+- Window size
+- Default audio directory
+
+Existing settings are supplemented with required default values when necessary.
+
+## Requirements
+
+- Python 3
+- pygame
+
+Install the runtime dependencies with:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+For development and automated testing:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+```
+
+## Starting Jingleplayer
+
+Open a terminal in the project directory and run:
+
+```powershell
+python jingleplayer_gui_tkinter.py
+```
+
+## Operation
+
+### Play a jingle
+
+Left-click a configured button.
+
+The assigned audio file starts playing and the status indicator changes to the active state.
+
+### Stop a jingle
+
+Left-click the same button again.
+
+The configured fadeout is applied to that button.
+
+Other active jingles continue playing independently.
+
+### Configure a button
+
+Right-click a jingle button to open its configuration dialog.
+
+The dialog allows you to change:
+
+- Button text
+- Button color
+- Assigned MP3 or WAV file
+
+Changes can be saved with **Apply** or discarded with **Cancel**.
+
+## Settings
+
+The settings dialog provides configuration for:
+
+- Fadeout duration
+- Button height
+- Number of buttons in each of the four rows
+- Default audio directory
+- Settings file location
+
+The default fadeout duration is 1000 ms.
+
+Each of the four rows can contain between 0 and 10 buttons.
+
+## Automated tests
+
+The project contains an automated regression test suite for the audio engine, settings handling and volume logic.
+
+Install the development dependencies:
+
+```powershell
+python -m pip install -r requirements-dev.txt
