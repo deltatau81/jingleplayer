@@ -36,10 +36,29 @@ def isolated_settings(monkeypatch):
     initialize_calls = []
     saved_settings = []
 
+    def update_settings(texts, colors, paths, per_row, fadeout, button_height, window_size, volume):
+        settings["buttons"]["texts"] = list(texts)
+        settings["buttons"]["colors"] = list(colors)
+        settings["buttons"]["paths"] = list(paths)
+        settings["buttons"]["per_row"] = list(per_row)
+        settings["fadeout_duration"] = fadeout
+        settings["button_height"] = button_height
+        settings["window_size"] = list(window_size)
+        settings["volume"] = volume
+
+    def set_button_volume(index, volume_db):
+        settings["buttons"]["volumes"][index - 1] = int(volume_db)
+
+    def set_last_folder(folder):
+        settings["last_folder"] = str(folder)
+
     monkeypatch.setattr(gui.jingleplayer_logic, "initialize_settings", lambda: initialize_calls.append(True))
     monkeypatch.setattr(gui.jingleplayer_logic, "get_current_settings", lambda: deepcopy(settings))
     monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", lambda value: saved_settings.append(deepcopy(value)))
     monkeypatch.setattr(gui.jingleplayer_logic, "check_sound_end", lambda: [])
+    monkeypatch.setattr(gui.jingleplayer_logic, "update_settings_data", update_settings)
+    monkeypatch.setattr(gui.jingleplayer_logic, "set_button_volume", set_button_volume)
+    monkeypatch.setattr(gui.jingleplayer_logic, "set_last_folder", set_last_folder)
 
     return settings, initialize_calls, saved_settings
 
@@ -438,7 +457,7 @@ def test_editor_receives_values_for_requested_one_based_index(
     window.close()
 
 
-def test_edit_dialog_loads_all_values_and_disables_save(qt_app):
+def test_edit_dialog_loads_all_values_and_enables_save(qt_app):
     dialog = gui.JingleEditDialog("Tor", "#0080ff", "C:/Audio/tor.wav", -6, "C:/Audio")
 
     assert dialog.windowTitle() == "Jingle bearbeiten"
@@ -450,7 +469,7 @@ def test_edit_dialog_loads_all_values_and_disables_save(qt_app):
     assert dialog.volume_spin.maximum() == 10
     assert dialog.volume_spin.value() == -6
     assert dialog.volume_spin.suffix() == " dB"
-    assert not dialog.save_button.isEnabled()
+    assert dialog.save_button.isEnabled()
 
     dialog.reject()
 
@@ -494,6 +513,7 @@ def test_file_dialog_changes_only_temporary_path(qt_app, monkeypatch):
     assert calls == [("Audiodatei auswählen", "C:/Start", "Audiodateien (*.mp3 *.wav)")]
     assert dialog.path_edit.text() == "C:/Other/new.mp3"
     assert dialog.last_folder == "C:/Start"
+    assert dialog.selected_folder == str(gui.Path("C:/Other/new.mp3").parent)
     dialog.reject()
 
 
@@ -529,3 +549,207 @@ def test_escape_and_window_close_reject_edit_dialog(qt_app):
     close_dialog.close()
 
     assert close_dialog.result() == gui.QDialog.DialogCode.Rejected
+
+
+def test_save_button_accepts_dialog(qt_app):
+    dialog = gui.JingleEditDialog("A", "red", "a.wav", 0, "C:/Start")
+
+    dialog.save_button.click()
+
+    assert dialog.result() == gui.QDialog.DialogCode.Accepted
+
+
+def test_accepted_edit_updates_runtime_tile_engine_and_complete_settings(
+    qt_app, isolated_settings, mocked_audio, monkeypatch
+):
+    settings, _, saved_settings = isolated_settings
+    original_settings = deepcopy(settings)
+    volume_calls = []
+    audio_play_calls, audio_stop_calls = mocked_audio
+
+    def set_button_volume(index, volume_db):
+        volume_calls.append((index, volume_db))
+        settings["buttons"]["volumes"][index - 1] = volume_db
+
+    class AcceptedDialog:
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+        def get_values(self):
+            return {
+                "text": "Changed A",
+                "color": "#00ff00",
+                "path": "C:/Other/new.wav",
+                "volume_db": 7,
+                "selected_folder": None,
+            }
+
+    monkeypatch.setattr(gui.jingleplayer_logic, "set_button_volume", set_button_volume)
+    monkeypatch.setattr(gui, "JingleEditDialog", AcceptedDialog)
+    window = gui.create_main_window()
+    tile = window.jingle_tiles[0]
+    tile.set_playing(True)
+
+    window._open_jingle_editor(1)
+
+    assert settings["buttons"]["texts"] == ["Changed A", "B"]
+    assert settings["buttons"]["colors"] == ["#00ff00", "blue"]
+    assert settings["buttons"]["paths"] == ["C:/Other/new.wav", "b.mp3"]
+    assert settings["buttons"]["volumes"] == [7, 4]
+    assert window.jingle_texts == ["Changed A", "B"]
+    assert window.jingle_colors == ["#00ff00", "blue"]
+    assert window.jingle_paths == ["C:/Other/new.wav", "b.mp3"]
+    assert window.jingle_volumes == [7, 4]
+    assert tile.label.text() == "Changed A"
+    assert tile.playing is True
+    assert "background-color: #00ff00" in tile.styleSheet()
+    assert "border: 3px solid #ffffff" in tile.styleSheet()
+    assert tile.label.styleSheet().startswith(f"color: {gui.contrasting_text_color('#00ff00')}")
+    assert window.jingle_tiles[1].label.text() == "B"
+    assert window.jingle_tiles[1].jingle_color == "blue"
+    assert volume_calls == [(1, 7)]
+    assert audio_play_calls == []
+    assert audio_stop_calls == []
+    assert len(saved_settings) == 1
+
+    expected_settings = deepcopy(original_settings)
+    expected_settings["buttons"]["texts"][0] = "Changed A"
+    expected_settings["buttons"]["colors"][0] = "#00ff00"
+    expected_settings["buttons"]["paths"][0] = "C:/Other/new.wav"
+    expected_settings["buttons"]["volumes"][0] = 7
+    assert saved_settings[0] == expected_settings
+
+    tile.set_playing(False)
+    assert "background-color: #00ff00" in tile.styleSheet()
+    assert "border: 1px solid rgba(0, 0, 0, 45)" in tile.styleSheet()
+
+    tile.clicked.emit(1)
+    assert audio_play_calls == [(1, "C:/Other/new.wav", 750)]
+    window.close()
+
+
+@pytest.mark.parametrize("index", [1, 2])
+def test_accepted_edit_updates_only_requested_list_position(
+    qt_app, isolated_settings, monkeypatch, index
+):
+    settings, _, _ = isolated_settings
+    original = deepcopy(settings["buttons"])
+
+    class AcceptedDialog:
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+        def get_values(self):
+            return {
+                "text": f"Changed {index}",
+                "color": "#ffffff",
+                "path": f"changed-{index}.wav",
+                "volume_db": index,
+                "selected_folder": None,
+            }
+
+    monkeypatch.setattr(gui, "JingleEditDialog", AcceptedDialog)
+    window = gui.create_main_window()
+
+    window._open_jingle_editor(index)
+
+    changed_position = index - 1
+    other_position = 1 - changed_position
+    assert settings["buttons"]["texts"][changed_position] == f"Changed {index}"
+    assert settings["buttons"]["colors"][changed_position] == "#ffffff"
+    assert settings["buttons"]["paths"][changed_position] == f"changed-{index}.wav"
+    assert settings["buttons"]["volumes"][changed_position] == index
+    for key in ("texts", "colors", "paths", "volumes"):
+        assert settings["buttons"][key][other_position] == original[key][other_position]
+    window.close()
+
+
+@pytest.mark.parametrize(
+    ("selected_folder", "expected_folder"),
+    [("C:/Picked", "C:/Picked"), (None, "C:/Jingles")],
+)
+def test_last_folder_changes_only_for_browsed_file_after_accept(
+    qt_app, isolated_settings, monkeypatch, selected_folder, expected_folder
+):
+    settings, _, saved_settings = isolated_settings
+
+    class AcceptedDialog:
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+        def get_values(self):
+            return {
+                "text": "A",
+                "color": "red",
+                "path": "C:/Picked/new.wav",
+                "volume_db": -3,
+                "selected_folder": selected_folder,
+            }
+
+    monkeypatch.setattr(gui, "JingleEditDialog", AcceptedDialog)
+    window = gui.create_main_window()
+
+    window._open_jingle_editor(1)
+
+    assert settings["last_folder"] == expected_folder
+    assert window.last_folder == expected_folder
+    assert saved_settings[-1]["last_folder"] == expected_folder
+    window.close()
+
+
+def test_saved_edit_is_visible_after_reopen_restart_and_close(
+    qt_app, isolated_settings, monkeypatch
+):
+    settings, _, saved_settings = isolated_settings
+    opened_values = []
+
+    class FirstAcceptedDialog:
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+        def get_values(self):
+            return {
+                "text": "Persistent",
+                "color": "#123456",
+                "path": "persistent.mp3",
+                "volume_db": -8,
+                "selected_folder": "C:/Persistent",
+            }
+
+    monkeypatch.setattr(gui, "JingleEditDialog", FirstAcceptedDialog)
+    first_window = gui.create_main_window()
+    first_window._open_jingle_editor(1)
+    first_window.close()
+    saved_after_close = deepcopy(saved_settings[-1])
+
+    class ReopenedDialog:
+        def __init__(self, text, color, path, volume_db, last_folder, parent):
+            opened_values.append((text, color, path, volume_db, last_folder))
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(gui, "JingleEditDialog", ReopenedDialog)
+    restarted_window = gui.create_main_window()
+    restarted_window._open_jingle_editor(1)
+
+    assert restarted_window.jingle_tiles[0].label.text() == "Persistent"
+    assert opened_values == [("Persistent", "#123456", "persistent.mp3", -8, "C:/Persistent")]
+    assert saved_after_close["buttons"]["texts"][0] == "Persistent"
+    assert saved_after_close["buttons"]["colors"][0] == "#123456"
+    assert saved_after_close["buttons"]["paths"][0] == "persistent.mp3"
+    assert saved_after_close["buttons"]["volumes"][0] == -8
+    assert saved_after_close["last_folder"] == "C:/Persistent"
+    restarted_window.close()

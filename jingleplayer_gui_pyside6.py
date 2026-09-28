@@ -98,6 +98,20 @@ class JingleTile(QFrame):
         self.playing = bool(playing)
         self._apply_style()
 
+    def update_content(self, text, background_color):
+        self.jingle_text = str(text)
+        self.jingle_color = str(background_color)
+        self.display_color = QColor(self.jingle_color)
+        if not self.display_color.isValid():
+            self.display_color = QColor("#f0f0f0")
+        self.label.setText(self.jingle_text)
+        self.label.setStyleSheet(
+            f"color: {contrasting_text_color(self.display_color.name())};"
+            "font-weight: 600;"
+            "background: transparent;"
+        )
+        self._apply_style()
+
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
             self.clicked.emit(self.jingle_index)
@@ -118,6 +132,7 @@ class JingleEditDialog(QDialog):
         self.setWindowTitle("Jingle bearbeiten")
         self.color_value = str(color)
         self.last_folder = str(last_folder)
+        self.selected_folder = None
 
         form_layout = QFormLayout()
 
@@ -151,9 +166,10 @@ class JingleEditDialog(QDialog):
         )
         self.save_button = self.button_box.button(QDialogButtonBox.StandardButton.Save)
         self.save_button.setText("Speichern")
-        self.save_button.setEnabled(False)
+        self.save_button.setEnabled(True)
         self.cancel_button = self.button_box.button(QDialogButtonBox.StandardButton.Cancel)
         self.cancel_button.setText("Abbrechen")
+        self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
@@ -169,6 +185,7 @@ class JingleEditDialog(QDialog):
         )
         if selected_path:
             self.path_edit.setText(selected_path)
+            self.selected_folder = str(Path(selected_path).parent)
 
     def _choose_color(self):
         initial_color = QColor(self.color_value)
@@ -186,6 +203,15 @@ class JingleEditDialog(QDialog):
             f"background-color: {display_color.name()};"
             f"color: {contrasting_text_color(display_color.name())};"
         )
+
+    def get_values(self):
+        return {
+            "text": self.name_edit.text(),
+            "color": self.color_value,
+            "path": self.path_edit.text(),
+            "volume_db": self.volume_spin.value(),
+            "selected_folder": self.selected_folder,
+        }
 
 
 class JingleplayerMainWindow(QMainWindow):
@@ -305,7 +331,40 @@ class JingleplayerMainWindow(QMainWindow):
             self.last_folder,
             self,
         )
-        dialog.exec()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        values = dialog.get_values()
+        current_settings = jingleplayer_logic.get_current_settings()
+        button_settings = current_settings["buttons"]
+        button_settings["texts"][list_index] = values["text"]
+        button_settings["colors"][list_index] = values["color"]
+        button_settings["paths"][list_index] = values["path"]
+
+        jingleplayer_logic.update_settings_data(
+            button_settings["texts"],
+            button_settings["colors"],
+            button_settings["paths"],
+            button_settings["per_row"],
+            current_settings["fadeout_duration"],
+            current_settings["button_height"],
+            current_settings["window_size"],
+            current_settings["volume"],
+        )
+        jingleplayer_logic.set_button_volume(index, values["volume_db"])
+        if values["selected_folder"] is not None:
+            jingleplayer_logic.set_last_folder(values["selected_folder"])
+
+        updated_settings = jingleplayer_logic.get_current_settings()
+        updated_buttons = updated_settings["buttons"]
+        self.jingle_texts = updated_buttons["texts"]
+        self.jingle_colors = updated_buttons["colors"]
+        self.jingle_paths = updated_buttons["paths"]
+        self.jingle_volumes = updated_buttons["volumes"]
+        self.last_folder = updated_settings["last_folder"]
+
+        self.jingle_tiles[list_index].update_content(values["text"], values["color"])
+        jingleplayer_logic.save_settings(updated_settings)
 
     def _poll_sound_end(self):
         indicator_updates = jingleplayer_logic.check_sound_end()
