@@ -753,3 +753,73 @@ def test_saved_edit_is_visible_after_reopen_restart_and_close(
     assert saved_after_close["buttons"]["volumes"][0] == -8
     assert saved_after_close["last_folder"] == "C:/Persistent"
     restarted_window.close()
+
+
+def test_fadeout_control_loads_settings_without_saving(qt_app, isolated_settings):
+    _, _, saved_settings = isolated_settings
+
+    window = gui.create_main_window()
+
+    assert window.fadeout_spin.minimum() == 0
+    assert window.fadeout_spin.maximum() == gui.MAX_FADEOUT_DURATION_MS
+    assert window.fadeout_spin.singleStep() == 1
+    assert window.fadeout_spin.suffix() == " ms"
+    assert window.fadeout_spin.value() == 750
+    assert window.fadeout_duration == 750
+    assert saved_settings == []
+    window.close()
+
+
+def test_fadeout_change_updates_complete_settings_without_audio_or_tile_changes(
+    qt_app, isolated_settings, mocked_audio
+):
+    settings, _, saved_settings = isolated_settings
+    original_settings = deepcopy(settings)
+    play_calls, stop_calls = mocked_audio
+    window = gui.create_main_window()
+    window.jingle_tiles[0].set_playing(True)
+    original_tile_style = window.jingle_tiles[0].styleSheet()
+
+    window.fadeout_spin.setValue(2500)
+
+    assert window.fadeout_duration == 2500
+    assert settings["fadeout_duration"] == 2500
+    assert play_calls == []
+    assert stop_calls == []
+    assert window.jingle_tiles[0].playing is True
+    assert window.jingle_tiles[0].styleSheet() == original_tile_style
+    assert len(saved_settings) == 1
+    expected_settings = deepcopy(original_settings)
+    expected_settings["fadeout_duration"] = 2500
+    assert saved_settings[0] == expected_settings
+    window.close()
+
+
+def test_play_and_stop_use_changed_fadeout(qt_app, isolated_settings, mocked_audio):
+    window = gui.create_main_window()
+    play_calls, stop_calls = mocked_audio
+
+    window.fadeout_spin.setValue(2500)
+    window.jingle_tiles[0].clicked.emit(1)
+    window.jingle_tiles[0].clicked.emit(1)
+
+    assert play_calls == [(1, "a.wav", 2500)]
+    assert stop_calls == [(1, 2500)]
+    window.close()
+
+
+def test_changed_fadeout_survives_close_and_simulated_restart(qt_app, isolated_settings):
+    settings, _, saved_settings = isolated_settings
+    first_window = gui.create_main_window()
+
+    first_window.fadeout_spin.setValue(1800)
+    first_window.close()
+    saved_after_close = deepcopy(saved_settings[-1])
+
+    restarted_window = gui.create_main_window()
+
+    assert settings["fadeout_duration"] == 1800
+    assert saved_after_close["fadeout_duration"] == 1800
+    assert restarted_window.fadeout_duration == 1800
+    assert restarted_window.fadeout_spin.value() == 1800
+    restarted_window.close()

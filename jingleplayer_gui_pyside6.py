@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
 
 import jingleplayer_logic
 
+MAX_FADEOUT_DURATION_MS = 2_147_483_647
+
 
 def resource_path(relative_path):
     """Return a resource path for source runs and future PyInstaller bundles."""
@@ -267,9 +269,20 @@ class JingleplayerMainWindow(QMainWindow):
         self.volume_value_label.setMinimumWidth(42)
         self.volume_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         volume_layout.addWidget(self.volume_value_label)
+
+        fadeout_label = QLabel("Fadeout", central_widget)
+        volume_layout.addWidget(fadeout_label)
+
+        self.fadeout_spin = QSpinBox(central_widget)
+        self.fadeout_spin.setRange(0, MAX_FADEOUT_DURATION_MS)
+        self.fadeout_spin.setSingleStep(1)
+        self.fadeout_spin.setSuffix(" ms")
+        self.fadeout_spin.setValue(int(current_settings["fadeout_duration"]))
+        volume_layout.addWidget(self.fadeout_spin)
         main_layout.addLayout(volume_layout)
 
         self.volume_slider.valueChanged.connect(self._handle_volume_change)
+        self.fadeout_spin.valueChanged.connect(self._handle_fadeout_change)
 
         button_settings = current_settings.get("buttons", {})
         texts = button_settings.get("texts", [])
@@ -376,6 +389,22 @@ class JingleplayerMainWindow(QMainWindow):
     def _handle_volume_change(self, volume_percent):
         self.volume_value_label.setText(f"{volume_percent} %")
         jingleplayer_logic.set_volume_logic(volume_percent)
+        jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
+
+    def _handle_fadeout_change(self, fadeout_duration):
+        current_settings = jingleplayer_logic.get_current_settings()
+        button_settings = current_settings["buttons"]
+        jingleplayer_logic.update_settings_data(
+            button_settings["texts"],
+            button_settings["colors"],
+            button_settings["paths"],
+            button_settings["per_row"],
+            fadeout_duration,
+            current_settings["button_height"],
+            current_settings["window_size"],
+            current_settings["volume"],
+        )
+        self.fadeout_duration = fadeout_duration
         jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
 
     def closeEvent(self, event):
