@@ -333,3 +333,62 @@ def test_sound_end_timer_is_active_until_window_closes(qt_app, isolated_settings
     qt_app.processEvents()
 
     assert not window.sound_end_timer.isActive()
+
+
+def test_global_volume_controls_load_saved_value(qt_app, isolated_settings):
+    window = gui.create_main_window()
+
+    assert window.volume_slider.minimum() == 0
+    assert window.volume_slider.maximum() == 100
+    assert window.volume_slider.value() == 65
+    assert window.volume_value_label.text() == "65 %"
+
+    window.close()
+
+
+def test_global_volume_change_updates_engine_label_and_settings(
+    qt_app, isolated_settings, monkeypatch
+):
+    settings, _, saved_settings = isolated_settings
+    original_settings = deepcopy(settings)
+    volume_calls = []
+
+    def set_volume(volume_percent):
+        volume_calls.append(volume_percent)
+        settings["volume"] = volume_percent
+        return {"volume_set": volume_percent}
+
+    monkeypatch.setattr(gui.jingleplayer_logic, "set_volume_logic", set_volume)
+    window = gui.create_main_window()
+
+    window.volume_slider.setValue(42)
+
+    assert window.volume_value_label.text() == "42 %"
+    assert volume_calls == [42]
+    assert saved_settings[-1]["volume"] == 42
+    expected_settings = deepcopy(original_settings)
+    expected_settings["volume"] = 42
+    assert saved_settings[-1] == expected_settings
+
+    window.close()
+
+
+def test_changed_global_volume_is_loaded_after_simulated_restart(
+    qt_app, isolated_settings, monkeypatch
+):
+    settings, _, _ = isolated_settings
+
+    def set_volume(volume_percent):
+        settings["volume"] = volume_percent
+        return {"volume_set": volume_percent}
+
+    monkeypatch.setattr(gui.jingleplayer_logic, "set_volume_logic", set_volume)
+    first_window = gui.create_main_window()
+    first_window.volume_slider.setValue(37)
+    first_window.close()
+
+    restarted_window = gui.create_main_window()
+
+    assert restarted_window.volume_slider.value() == 37
+    assert restarted_window.volume_value_label.text() == "37 %"
+    restarted_window.close()

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -129,6 +130,26 @@ class JingleplayerMainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(8)
 
+        volume_layout = QHBoxLayout()
+        volume_layout.setContentsMargins(0, 0, 0, 0)
+        volume_layout.setSpacing(8)
+
+        volume_label = QLabel("Lautstärke", central_widget)
+        volume_layout.addWidget(volume_label)
+
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal, central_widget)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(int(current_settings["volume"]))
+        volume_layout.addWidget(self.volume_slider, 1)
+
+        self.volume_value_label = QLabel(f"{self.volume_slider.value()} %", central_widget)
+        self.volume_value_label.setMinimumWidth(42)
+        self.volume_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        volume_layout.addWidget(self.volume_value_label)
+        main_layout.addLayout(volume_layout)
+
+        self.volume_slider.valueChanged.connect(self._handle_volume_change)
+
         button_settings = current_settings.get("buttons", {})
         texts = button_settings.get("texts", [])
         colors = button_settings.get("colors", [])
@@ -184,6 +205,11 @@ class JingleplayerMainWindow(QMainWindow):
             index = update["index"]
             if 1 <= index <= len(self.jingle_tiles):
                 self.jingle_tiles[index - 1].set_playing(update["playing"])
+
+    def _handle_volume_change(self, volume_percent):
+        self.volume_value_label.setText(f"{volume_percent} %")
+        jingleplayer_logic.set_volume_logic(volume_percent)
+        jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
 
     def closeEvent(self, event):
         self.sound_end_timer.stop()
