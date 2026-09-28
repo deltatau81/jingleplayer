@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox, colorchooser, filedialog
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import jingleplayer_logic  # Importiert die Logik-Datei!
@@ -18,6 +19,15 @@ current_popup = None
 periodic_check_id = None  # Global variable to store the after ID for periodic_check_gui # NEU: Globale Variable für after ID
 
 
+
+def resource_path(relative_path):
+    """Return the absolute path to a bundled application resource."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base_path = Path(sys._MEIPASS)
+    else:
+        base_path = Path(__file__).resolve().parent
+
+    return base_path / relative_path
 
 def periodic_check_gui(): # GLOBALE DEFINITION, VOR main_gui()
     global root, indicators, periodic_check_id
@@ -47,10 +57,10 @@ def main_gui():
     root.configure(bg="SystemButtonFace")
     root_bg = root.cget("bg")  # store for later frame creation
 
-    # Set the window icon
-    icon_path = jingleplayer_logic.data_dir / "cc.ico"
-    if (icon_path.exists()):
-        root.iconbitmap(str(icon_path))  # Pfad muss String sein für iconbitmap
+    # Set the window icon from the bundled application resources
+    icon_path = resource_path(Path("assets") / "jingleplayer.ico")
+    if icon_path.exists():
+        root.iconbitmap(str(icon_path))
 
 
     # Create top frame for label, volume slider, and buttons  <-- TOP_FRAME UMFASST JETZT AUCH BUTTONS
@@ -884,7 +894,7 @@ def on_button_volume_change_gui(index, val):
 
 def show_help_gui():
     """Zeigt die Hilfedatei in einem neuen Fenster an."""
-    help_file = Path(__file__).parent / "HELP.md"
+    help_file = resource_path("HELP.md")
 
     # Versuche, die Hilfedatei zu lesen
     try:
