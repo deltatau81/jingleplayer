@@ -326,6 +326,7 @@ class JingleplayerMainWindow(QMainWindow):
         self.setWindowTitle("Jingleplayer")
 
         window_size = current_settings["window_size"]
+        self._persisted_window_size = (int(window_size[0]), int(window_size[1]))
         self.resize(int(window_size[0]), int(window_size[1]))
 
         icon_path = resource_path(Path("assets") / "jingleplayer.ico")
@@ -500,7 +501,10 @@ class JingleplayerMainWindow(QMainWindow):
         self.last_folder = updated_settings["last_folder"]
 
         self.jingle_tiles[list_index].update_content(values["text"], values["color"])
-        jingleplayer_logic.save_settings(updated_settings)
+        self._save_settings_with_feedback(
+            updated_settings,
+            "Jingle konnte nicht gespeichert werden",
+        )
 
     def _poll_sound_end(self):
         indicator_updates = jingleplayer_logic.check_sound_end()
@@ -512,7 +516,21 @@ class JingleplayerMainWindow(QMainWindow):
     def _handle_volume_change(self, volume_percent):
         self.volume_value_label.setText(f"{volume_percent} %")
         jingleplayer_logic.set_volume_logic(volume_percent)
-        jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
+        self._save_settings_with_feedback(
+            jingleplayer_logic.get_current_settings(),
+            "Lautstärke konnte nicht gespeichert werden",
+        )
+
+    def _save_settings_with_feedback(self, current_settings, title):
+        result = jingleplayer_logic.save_settings(current_settings)
+        if result.get("success"):
+            return True
+        QMessageBox.critical(
+            self,
+            title,
+            result.get("error") or "Die Einstellungen konnten nicht gespeichert werden.",
+        )
+        return False
 
     def _open_settings_dialog(self):
         current_settings = jingleplayer_logic.get_current_settings()
@@ -553,8 +571,11 @@ class JingleplayerMainWindow(QMainWindow):
         self.jingle_volumes = updated_buttons["volumes"]
         self.buttons_per_row = list(updated_buttons["per_row"])
         self.button_height = int(updated_settings["button_height"])
-        jingleplayer_logic.save_settings(updated_settings)
-        self._rebuild_jingle_layout()
+        if self._save_settings_with_feedback(
+            updated_settings,
+            "Einstellungen konnten nicht gespeichert werden",
+        ):
+            self._rebuild_jingle_layout()
 
     def _save_fadeout_duration(self, fadeout_duration):
         self._save_application_settings(
@@ -565,15 +586,30 @@ class JingleplayerMainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.sound_end_timer.stop()
-        current_settings = jingleplayer_logic.get_current_settings()
-        current_settings["window_size"] = [self.width(), self.height()]
-        jingleplayer_logic.save_settings(current_settings)
+        current_size = (self.width(), self.height())
+        if current_size != self._persisted_window_size:
+            current_settings = jingleplayer_logic.get_current_settings()
+            current_settings["window_size"] = list(current_size)
+            if self._save_settings_with_feedback(
+                current_settings,
+                "Fenstergröße konnte nicht gespeichert werden",
+            ):
+                self._persisted_window_size = current_size
         super().closeEvent(event)
 
 
 def create_main_window():
     """Initialize settings once and create the PySide6 main window."""
     jingleplayer_logic.initialize_settings()
+    persistence_status = jingleplayer_logic.get_settings_persistence_status()
+    if persistence_status["write_blocked"]:
+        error = persistence_status.get("error") or "Unbekannter Fehler"
+        QMessageBox.critical(
+            None,
+            "Einstellungen konnten nicht geladen werden",
+            f"{error}\n\nDie vorhandene Settingsdatei wurde nicht verändert.",
+        )
+        return None
     current_settings = jingleplayer_logic.get_current_settings()
     window = JingleplayerMainWindow(current_settings)
 
@@ -583,6 +619,8 @@ def create_main_window():
 def main():
     app = QApplication(sys.argv)
     window = create_main_window()
+    if window is None:
+        return 1
     window.show()
     return app.exec()
 

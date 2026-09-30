@@ -53,8 +53,25 @@ def isolated_settings(monkeypatch):
         settings["last_folder"] = str(folder)
 
     monkeypatch.setattr(gui.jingleplayer_logic, "initialize_settings", lambda: initialize_calls.append(True))
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "get_settings_persistence_status",
+        lambda: {
+            "write_blocked": False,
+            "error": None,
+            "backup_required": False,
+            "source_exists": True,
+        },
+    )
     monkeypatch.setattr(gui.jingleplayer_logic, "get_current_settings", lambda: deepcopy(settings))
-    monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", lambda value: saved_settings.append(deepcopy(value)))
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda value: (
+            saved_settings.append(deepcopy(value))
+            or {"success": True, "skipped": False, "error": None}
+        ),
+    )
     monkeypatch.setattr(gui.jingleplayer_logic, "check_sound_end", lambda: [])
     monkeypatch.setattr(gui.jingleplayer_logic, "get_playing_indices", lambda: [])
     monkeypatch.setattr(gui.jingleplayer_logic, "update_settings_data", update_settings)
@@ -1292,3 +1309,247 @@ def test_layout_settings_survive_close_and_restart(qt_app, isolated_settings):
     assert [layout.count() for layout in restarted.row_layouts] == [0, 2, 0, 0, 0]
     assert saved_settings[-1]["button_height"] == 4
     restarted.close()
+
+
+@pytest.mark.parametrize("backup_required", [False, True])
+def test_startup_allows_normal_and_backup_required_status(
+    qt_app, isolated_settings, monkeypatch, backup_required
+):
+    errors = []
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "get_settings_persistence_status",
+        lambda: {
+            "write_blocked": False,
+            "error": None,
+            "backup_required": backup_required,
+            "source_exists": True,
+        },
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+
+    window = gui.create_main_window()
+
+    assert window is not None
+    assert errors == []
+    window.close()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Die Settingsdatei enthält ungültiges JSON.",
+        "Die Settingsdatei verwendet die nicht unterstützte schema_version 99.",
+    ],
+)
+def test_write_blocked_startup_reports_error_and_returns_no_window(
+    qt_app, isolated_settings, monkeypatch, error
+):
+    errors = []
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "get_settings_persistence_status",
+        lambda: {
+            "write_blocked": True,
+            "error": error,
+            "backup_required": False,
+            "source_exists": True,
+        },
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+
+    window = gui.create_main_window()
+
+    assert window is None
+    assert len(errors) == 1
+    assert errors[0][0] is None
+    assert errors[0][1] == "Einstellungen konnten nicht geladen werden"
+    assert error in errors[0][2]
+    assert "nicht verändert" in errors[0][2]
+
+
+@pytest.mark.parametrize("skipped", [False, True])
+def test_save_helper_treats_saved_and_skipped_as_success(
+    qt_app, isolated_settings, monkeypatch, skipped
+):
+    errors = []
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda settings: {"success": True, "skipped": skipped, "error": None},
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    window = gui.create_main_window()
+
+    result = window._save_settings_with_feedback({}, "Speicherfehler")
+
+    assert result is True
+    assert errors == []
+    window.close()
+
+
+def test_save_helper_reports_failure_once_with_main_window_parent(
+    qt_app, isolated_settings, monkeypatch
+):
+    errors = []
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda settings: {"success": False, "skipped": False, "error": "Datenträger voll"},
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    window = gui.create_main_window()
+
+    result = window._save_settings_with_feedback({}, "Speicherfehler")
+
+    assert result is False
+    assert errors == [(window, "Speicherfehler", "Datenträger voll")]
+    window.close()
+
+
+def test_failed_volume_save_keeps_runtime_change_and_reports_once(
+    qt_app, isolated_settings, monkeypatch
+):
+    settings, _, _ = isolated_settings
+    errors = []
+
+    def set_volume(value):
+        settings["volume"] = value
+
+    monkeypatch.setattr(gui.jingleplayer_logic, "set_volume_logic", set_volume)
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda value: {"success": False, "skipped": False, "error": "Nur lesbar"},
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    window = gui.create_main_window()
+
+    window.volume_slider.setValue(42)
+
+    assert settings["volume"] == 42
+    assert window.volume_value_label.text() == "42 %"
+    assert len(errors) == 1
+    assert errors[0][0] is window
+    assert "Nur lesbar" in errors[0][2]
+    window.close()
+
+
+def test_failed_jingle_editor_save_reports_once_without_audio_side_effect(
+    qt_app, isolated_settings, mocked_audio, monkeypatch
+):
+    errors = []
+    play_calls, stop_calls = mocked_audio
+
+    class AcceptedDialog:
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+        def get_values(self):
+            return {
+                "text": "Runtime edit",
+                "color": "#00ff00",
+                "path": "changed.wav",
+                "volume_db": 2,
+                "selected_folder": None,
+            }
+
+    monkeypatch.setattr(gui, "JingleEditDialog", AcceptedDialog)
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda value: {"success": False, "skipped": False, "error": "Schreibschutz"},
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    window = gui.create_main_window()
+
+    window._open_jingle_editor(1)
+
+    assert window.jingle_tiles[0].label.text() == "Runtime edit"
+    assert len(errors) == 1
+    assert errors[0][0] is window
+    assert play_calls == []
+    assert stop_calls == []
+    window.close()
+
+
+def test_failed_settings_save_keeps_runtime_values_without_layout_rebuild(
+    qt_app, isolated_settings, monkeypatch
+):
+    errors = []
+    window = gui.create_main_window()
+    original_tiles = list(window.jingle_tiles)
+    rebuilds = []
+    monkeypatch.setattr(window, "_rebuild_jingle_layout", lambda: rebuilds.append(True))
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda value: {"success": False, "skipped": False, "error": "Kein Speicherplatz"},
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+
+    window._save_application_settings(2500, [0, 2, 0, 0, 0], 4)
+
+    assert window.fadeout_duration == 2500
+    assert window.buttons_per_row == [0, 2, 0, 0, 0]
+    assert window.button_height == 4
+    assert window.jingle_tiles == original_tiles
+    assert rebuilds == []
+    assert len(errors) == 1
+    window.close()
+
+
+def test_unchanged_window_size_stops_timer_without_saving(
+    qt_app, isolated_settings, monkeypatch
+):
+    save_calls = []
+    monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", lambda value: save_calls.append(value))
+    window = gui.create_main_window()
+
+    window.close()
+
+    assert save_calls == []
+    assert not window.sound_end_timer.isActive()
+
+
+def test_changed_window_size_saves_once_and_updates_persisted_size(
+    qt_app, isolated_settings
+):
+    _, _, saved_settings = isolated_settings
+    window = gui.create_main_window()
+    window.resize(900, 640)
+
+    window.close()
+
+    assert len(saved_settings) == 1
+    assert saved_settings[0]["window_size"] == [900, 640]
+    assert window._persisted_window_size == (900, 640)
+
+
+def test_failed_window_size_save_reports_once_and_still_closes(
+    qt_app, isolated_settings, monkeypatch
+):
+    errors = []
+    monkeypatch.setattr(
+        gui.jingleplayer_logic,
+        "save_settings",
+        lambda value: {"success": False, "skipped": False, "error": "Datei gesperrt"},
+    )
+    monkeypatch.setattr(gui.QMessageBox, "critical", lambda *args: errors.append(args))
+    window = gui.create_main_window()
+    window.show()
+    qt_app.processEvents()
+    window.resize(900, 640)
+
+    window.close()
+    qt_app.processEvents()
+
+    assert not window.isVisible()
+    assert not window.sound_end_timer.isActive()
+    assert window._persisted_window_size == (1153, 509)
+    assert len(errors) == 1
+    assert errors[0][0] is window
+    assert "Datei gesperrt" in errors[0][2]
