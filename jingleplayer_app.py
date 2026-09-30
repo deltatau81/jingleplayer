@@ -1,12 +1,9 @@
-import jingleplayer_logic
-import jingleplayer_gui_tkinter # Hier wird die Tkinter GUI importiert. Für Kivy später `jingleplayer_gui_kivy` importieren
+import jingleplayer_gui_pyside6
+
 
 def main():
-    # Initialisiere Einstellungen und globale Variablen in der Logik
-    jingleplayer_logic.initialize_settings()
+    return jingleplayer_gui_pyside6.main()
 
-    # Starte die Tkinter GUI
-    jingleplayer_gui_tkinter.main_gui()
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

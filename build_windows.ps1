@@ -1,13 +1,13 @@
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = $PSScriptRoot
-$EntryPoint  = Join-Path $ProjectRoot "jingleplayer_gui_tkinter.py"
+$EntryPoint  = Join-Path $ProjectRoot "jingleplayer_app.py"
 $Icon       = Join-Path $ProjectRoot "assets\jingleplayer.ico"
 $HelpFile   = Join-Path $ProjectRoot "HELP.md"
 $BuildDir   = Join-Path $ProjectRoot "build"
 $DistDir    = Join-Path $ProjectRoot "dist"
 $SpecDir    = Join-Path $BuildDir "pyinstaller-spec"
-$TestTemp   = Join-Path $env:USERPROFILE "jingleplayer-pytest-temp"
+$TestTemp   = Join-Path ([System.IO.Path]::GetTempPath()) ("jingleplayer-pytest-" + [guid]::NewGuid().ToString("N"))
 
 Set-Location $ProjectRoot
 
