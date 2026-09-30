@@ -2,213 +2,127 @@
 
 ## Übersicht
 
-Jingleplayer ist eine Desktop-Anwendung zum schnellen Abspielen von Jingles über frei konfigurierbare Buttons.
+Jingleplayer ist eine Desktop-Anwendung zum schnellen Abspielen von Jingles über frei konfigurierbare Kacheln. Unterstützt werden MP3- und WAV-Dateien.
 
-Unterstützt werden MP3- und WAV-Dateien. Für jeden Button können Text, Farbe, Audiodatei und individuelle Lautstärke eingestellt werden.
-
-Mehrere Jingles können gleichzeitig und unabhängig voneinander abgespielt werden.
-
-Die Einstellungen werden automatisch gespeichert.
-
----
+Mehrere Jingles können gleichzeitig und unabhängig voneinander abgespielt werden. Für jeden Jingle lassen sich Text, Farbe, Audiodatei und individuelle Lautstärke einstellen.
 
 ## Hauptfenster
 
-### Jingle-Buttons
+### Jingle-Kacheln
 
-Jingleplayer unterstützt bis zu 40 Jingle-Buttons in vier Reihen.
+Jingleplayer verwaltet 50 dauerhafte Jingle-Plätze in fünf Reihen. Für jede Reihe kann eingestellt werden, wie viele Kacheln sichtbar sind:
 
-Für jede Reihe kann eingestellt werden, wie viele Buttons angezeigt werden:
+- 0 bis 10 Kacheln pro Reihe
+- maximal 50 sichtbare Kacheln insgesamt
+- genau fünf konfigurierbare Reihen
 
-- 0 bis 10 Buttons pro Reihe
-- maximal 40 Buttons insgesamt
+Weniger sichtbare Kacheln löschen keine Konfigurationen. Wird die Anzahl später wieder erhöht, erscheinen die zuvor ausgeblendeten Plätze mit ihren gespeicherten Einstellungen erneut.
 
-Jeder Button kann unabhängig konfiguriert werden.
+### Jingle starten und stoppen
 
-### Jingle starten
+Ein Linksklick auf eine inaktive Kachel startet den zugeordneten Jingle. Die aktive Umrandung der Kachel zeigt an, dass dieser Jingle läuft.
 
-Klicken Sie mit der linken Maustaste auf einen konfigurierten Button.
+Ein weiterer Linksklick auf dieselbe aktive Kachel stoppt beziehungsweise blendet nur diesen Jingle mit der eingestellten Fadeout-Dauer aus. Andere laufende Jingles werden nicht beeinflusst.
 
-Der zugeordnete Jingle wird abgespielt. Die Statusanzeige des Buttons wechselt in den aktiven Zustand.
-
-### Jingle stoppen
-
-Klicken Sie erneut mit der linken Maustaste auf denselben Button.
-
-Der Jingle wird mit der eingestellten Fadeout-Dauer ausgeblendet.
-
-Andere gleichzeitig laufende Jingles werden dadurch nicht gestoppt.
+Wenn ein Jingle natürlich endet, entfernt Jingleplayer seine aktive Umrandung automatisch.
 
 ### Mehrere Jingles gleichzeitig
 
-Mehrere Jingles können gleichzeitig abgespielt werden.
+Mehrere Jingles können gleichzeitig abgespielt und unabhängig voneinander gestoppt werden. Auch dieselbe Audiodatei kann über unterschiedliche Kacheln auf getrennten Wiedergabekanälen laufen.
 
-Jeder aktive Button wird unabhängig verwaltet. Dadurch kann beispielsweise ein Jingle gestoppt werden, während andere Jingles weiterlaufen.
-
-Auch dieselbe Audiodatei kann unabhängig über unterschiedliche Buttons beziehungsweise Wiedergabekanäle abgespielt werden.
-
----
-
-## Statusanzeige
-
-Unter jedem Jingle-Button befindet sich eine Statusanzeige.
-
-- **Grün / Pause** – der Button ist nicht aktiv
-- **Rot / Play** – der Jingle wird abgespielt
-
-Wenn ein Jingle von selbst vollständig abgespielt wurde, erkennt Jingleplayer das Ende der Wiedergabe und setzt die Anzeige automatisch wieder auf den inaktiven Zustand.
-
----
+Eine globale Funktion zum gleichzeitigen Stoppen aller Jingles ist nicht vorhanden.
 
 ## Lautstärke
 
 ### Globale Lautstärke
 
-Der Lautstärke-Regler im oberen Bereich des Hauptfensters steuert die Gesamtlautstärke.
+Der Regler im oberen Bereich des Hauptfensters steuert die Gesamtlautstärke von 0 bis 100 Prozent. Die Änderung wirkt sofort und wird gespeichert.
 
-Bereich:
+### Individuelle Jingle-Lautstärke
 
-`0–100 %`
+Jeder Jingle besitzt im Bearbeitungsdialog eine zusätzliche Einstellung von -10 dB bis +10 dB. Damit können unterschiedlich laute Audiodateien angeglichen werden.
 
-Die Einstellung wird gespeichert.
+Die globale und die individuelle Lautstärke werden gemeinsam berücksichtigt. Änderungen wirken auch auf einen bereits laufenden Jingle.
 
-### Individuelle Button-Lautstärke
+## Jingle bearbeiten
 
-Jeder Jingle-Button besitzt zusätzlich eine individuelle Lautstärkeeinstellung.
+Ein Rechtsklick auf eine Jingle-Kachel öffnet den Bearbeitungsdialog. Dort können geändert werden:
 
-Bereich:
+- Name beziehungsweise Text
+- MP3- oder WAV-Datei
+- Kachelfarbe
+- individuelle Lautstärke von -10 dB bis +10 dB
 
-`-10 dB bis +10 dB`
+Die Schaltfläche **Durchsuchen...** öffnet den nativen Dateidialog. Der zuletzt verwendete Audioordner wird für die nächste Dateiauswahl automatisch vorgemerkt.
 
-Damit können unterschiedlich laute Audiodateien aneinander angepasst werden.
-
-Beispielsweise kann ein besonders lauter Jingle abgesenkt werden, ohne die Lautstärke der anderen Jingles verändern zu müssen.
-
-Änderungen der individuellen Lautstärke werden auch auf einen bereits laufenden Jingle angewendet.
-
-Die globale Lautstärke und die individuelle Button-Lautstärke werden bei der Wiedergabe gemeinsam berücksichtigt.
-
----
-
-## Button bearbeiten
-
-Klicken Sie mit der rechten Maustaste auf einen Jingle-Button, um dessen Einstellungen zu bearbeiten.
-
-### Text
-
-Die Beschriftung des Buttons kann geändert werden.
-
-### Farbe
-
-Die Farbe des Buttons kann über die angebotenen Farben beziehungsweise den Farbwähler eingestellt werden.
-
-### Audiodatei
-
-Dem Button kann eine Audiodatei zugeordnet werden.
-
-Unterstützte Dateiformate:
-
-- `.mp3`
-- `.wav`
-
-Der Dateipfad kann über die Dateiauswahl festgelegt werden.
-
-### Änderungen übernehmen
-
-Mit **Übernehmen** werden die Änderungen gespeichert.
-
-Mit **Abbrechen** wird der Dialog ohne Übernahme der Änderungen geschlossen.
-
-Der Dialog kann ebenfalls über das X des Fensters geschlossen werden.
-
-Nach dem Schließen kann der Bearbeitungsdialog wieder normal für einen anderen Button geöffnet werden.
-
----
+Mit **Speichern** werden die Änderungen übernommen. **Abbrechen**, Escape oder das X des Fensters schließen den Dialog ohne Übernahme.
 
 ## Einstellungen
 
-Über die Schaltfläche **⚙ Einstellungen** wird das Einstellungsfenster geöffnet.
+Die Schaltfläche **Einstellungen** öffnet den Einstellungsdialog.
 
 ### Fadeout-Dauer
 
-Die Fadeout-Dauer legt fest, wie lange ein Jingle beim manuellen Stoppen ausgeblendet wird.
+Die Fadeout-Dauer bestimmt in Millisekunden, wie lange ein Jingle beim manuellen Stoppen ausgeblendet wird. Der Standardwert beträgt 1000 ms. Der Fadeout betrifft nur den gestoppten Jingle.
 
-Die Angabe erfolgt in Millisekunden.
+### Kacheln pro Reihe
 
-Standardwert:
+Für jede der fünf Reihen kann ein Wert von 0 bis 10 festgelegt werden. Mindestens eine Kachel muss insgesamt sichtbar bleiben.
 
-`1000 ms`
+Alle 50 Jingle-Plätze bleiben gespeichert, auch wenn über die fünf Reihen momentan weniger Kacheln angezeigt werden.
 
-Der Fadeout betrifft nur den Jingle, der gestoppt wurde. Andere laufende Jingles werden nicht beeinflusst.
+### Kachelhöhe
 
-### Button-Höhe
+Die Höhe der Jingle-Kacheln kann im Einstellungsdialog angepasst werden.
 
-Hier kann die Höhe der Jingle-Buttons angepasst werden.
+Nach einem erfolgreichen Speichern werden Änderungen an Reihen und Kachelhöhe sofort sichtbar. Ein Neustart ist nicht erforderlich.
 
-Standardwert:
+### Hilfe
 
-`2`
+Die Schaltfläche **Hilfe** öffnet dieses mit der Anwendung ausgelieferte Handbuch direkt im Jingleplayer.
 
-Bei Änderungen am Layout kann ein Neustart der Anwendung erforderlich sein.
+Der Einstellungsdialog enthält keine Felder zum Ändern des Settings-Speicherorts oder zum Festlegen eines Standard-Audioordners. Der beim Durchsuchen zuletzt verwendete Audioordner wird automatisch gemerkt.
 
-### Buttons pro Reihe
+## Einstellungen und Datensicherheit
 
-Jingleplayer besitzt vier konfigurierbare Button-Reihen.
+Die Konfiguration wird normalerweise hier gespeichert:
 
-Für jede Reihe kann eine Anzahl zwischen 0 und 10 eingestellt werden.
+```text
+C:\Users\<Benutzer>\.jingleplayer\jingleplayer_settings.json
+```
 
-Damit können insgesamt bis zu 40 Buttons angezeigt werden.
+Jingleplayer verwendet das Settings-Format Version 2. Gespeichert werden unter anderem:
 
-### Standard-Dateipfad
-
-Hier kann ein bevorzugter Ordner für die Auswahl von Audiodateien festgelegt werden.
-
-Dieser Ordner wird bei späteren Datei-Auswahlen wieder verwendet.
-
-### Speicherort der Einstellungsdatei
-
-Jingleplayer speichert seine Konfiguration normalerweise unter:
-
-`C:\Users\<Benutzer>\.jingleplayer\jingleplayer_settings.json`
-
-Der verwendete Speicherort kann über die Einstellungen angezeigt beziehungsweise geändert werden.
-
-Wenn das normale Benutzerverzeichnis nicht verwendet werden kann, kann Jingleplayer auf ein alternatives Datenverzeichnis ausweichen.
-
----
-
-## Gespeicherte Einstellungen
-
-Jingleplayer speichert unter anderem:
-
-- Button-Texte
-- Button-Farben
-- Pfade der Audiodateien
-- Anzahl der Buttons pro Reihe
+- Texte, Farben und Audiodateien aller 50 Jingle-Plätze
+- individuelle Jingle-Lautstärken
+- fünf Werte für die sichtbaren Kacheln pro Reihe
 - globale Lautstärke
-- individuelle Button-Lautstärken
 - Fadeout-Dauer
-- Button-Höhe
+- Kachelhöhe
 - Fenstergröße
-- Standard-Dateipfad
+- zuletzt verwendeter Audioordner
 
-Ältere vorhandene Einstellungen werden beim Laden soweit erforderlich um fehlende Standardwerte ergänzt.
+### Ältere Einstellungen
 
----
+Ältere Einstellungen werden beim Laden für die aktuelle Anwendung aufbereitet. Reines Starten und unverändertes Schließen schreibt die vorhandene Datei nicht um.
 
-## Fenstergröße und Programmstart
+Beim ersten tatsächlichen Speichern einer Änderung wird vor der Umstellung eine exakte Sicherung der bisherigen Datei angelegt:
 
-Die Größe des Hauptfensters wird gespeichert.
+```text
+jingleplayer_settings.pre-pyside6.json
+```
 
-Beim nächsten Start verwendet Jingleplayer die gespeicherte Fenstergröße wieder.
+### Beschädigte oder neuere Einstellungen
 
-Während die Benutzeroberfläche aufgebaut wird, bleibt das eigentliche Hauptfenster zunächst verborgen. Währenddessen wird ein Startfenster angezeigt.
+Eine beschädigte oder strukturell ungültige Settingsdatei wird nicht automatisch überschrieben. Dasselbe gilt für eine Datei aus einer neueren, noch nicht unterstützten Formatversion. Jingleplayer zeigt in diesem Fall eine Fehlermeldung und beendet den Start kontrolliert.
 
-Dadurch wird verhindert, dass beim Programmstart eine noch unvollständig aufgebaute Oberfläche sichtbar ist.
+Auch Fehler beim späteren Speichern werden in einem Fehlerdialog angezeigt.
 
-Nach Abschluss des Aufbaus wird das Hauptfenster angezeigt.
+## Fenstergröße und Beenden
 
----
+Die gespeicherte Fenstergröße wird beim nächsten Start wiederhergestellt. Eine geänderte Fenstergröße wird beim Schließen gespeichert; bei unveränderter Größe ist kein zusätzlicher Speichervorgang nötig.
+
+Die Anwendung wird über das X des Hauptfensters geschlossen. Es gibt keine separate Beenden-Schaltfläche im Hauptfenster.
 
 ## Unterstützte Audioformate
 
@@ -217,117 +131,56 @@ Jingleplayer unterstützt:
 - MP3 (`.mp3`)
 - WAV (`.wav`)
 
-Andere Dateiformate werden derzeit nicht als Jingle-Dateien angeboten.
-
----
-
-## Beenden
-
-Die Anwendung kann über die Schaltfläche **Beenden** oder über das Schließen des Hauptfensters beendet werden.
-
-Die Einstellungen werden gespeichert, sodass sie beim nächsten Programmstart wieder zur Verfügung stehen.
-
----
-
-## Hilfe
-
-Dieses Benutzerhandbuch kann über die Hilfe-Funktion direkt im Jingleplayer geöffnet werden.
-
-Die zugrunde liegende Datei lautet:
-
-`HELP.md`
-
----
+Andere Formate werden nicht als Jingle-Dateien unterstützt.
 
 ## Fehlerbehebung
-
-### Audio-Funktion nicht verfügbar / pygame fehlt
-
-Jingleplayer verwendet pygame für die Audiowiedergabe.
-
-Falls pygame nicht installiert ist, kann es über die Kommandozeile installiert werden:
-
-```powershell
-python -m pip install pygame
-```
-
-Alternativ können die Projektabhängigkeiten installiert werden:
-
-```powershell id="5ce8pw"
-python -m pip install -r requirements.txt
-```
 
 ### Ein Jingle startet nicht
 
 Prüfen Sie:
 
-1. Ist dem Button eine Audiodatei zugeordnet?
+1. Ist der Kachel eine Audiodatei zugeordnet?
 2. Existiert die Datei noch am gespeicherten Speicherort?
 3. Handelt es sich um eine MP3- oder WAV-Datei?
-4. Ist pygame installiert?
-5. Ist die globale Lautstärke größer als 0?
-6. Ist die individuelle Lautstärke des Buttons passend eingestellt?
+4. Ist die globale Lautstärke größer als 0?
+5. Ist die individuelle Lautstärke passend eingestellt?
+
+Wiedergabefehler werden direkt in einem Fehlerdialog angezeigt.
 
 ### Einstellungen werden nicht gespeichert
 
-Prüfen Sie, ob das verwendete Einstellungsverzeichnis beschreibbar ist.
+Prüfen Sie, ob das Benutzerverzeichnis und der Ordner `.jingleplayer` beschreibbar sind. Fehler beim Speichern werden direkt in der Anwendung angezeigt.
 
-Der normale Speicherort unter Windows lautet:
+Die Standarddatei befindet sich unter:
 
-`C:\Users\<Benutzer>\.jingleplayer\`
+```text
+C:\Users\<Benutzer>\.jingleplayer\jingleplayer_settings.json
+```
 
 ### Audiodateien werden nicht angezeigt
 
-Prüfen Sie:
-
-- den ausgewählten Ordner
-- die Dateiendung
-- ob die Datei tatsächlich eine `.mp3`- oder `.wav`-Datei ist
+Prüfen Sie den im Dateidialog geöffneten Ordner, die Dateiendung und ob es sich tatsächlich um eine `.mp3`- oder `.wav`-Datei handelt.
 
 ### Ein Jingle ist zu laut oder zu leise
 
-Verwenden Sie den individuellen Lautstärke-Regler des betreffenden Buttons.
+Öffnen Sie den Jingle mit einem Rechtsklick und passen Sie seine individuelle dB-Einstellung an. Andere Jingles werden dadurch nicht verändert.
 
-Damit kann die Lautstärke dieses Jingles angepasst werden, ohne die Einstellungen der anderen Buttons zu verändern.
+### Aktive Umrandung bleibt sichtbar
 
-### Statusanzeige bleibt aktiv
-
-Normalerweise erkennt Jingleplayer automatisch, wenn eine Wiedergabe beendet wurde.
-
-Falls die Anzeige trotzdem nicht zurückgesetzt wird, prüfen Sie zunächst, ob die Audiodatei korrekt abgespielt werden kann und ob während der Wiedergabe eine Fehlermeldung in der Konsole ausgegeben wurde.
-
----
+Normalerweise wird die aktive Umrandung beim Stoppen oder natürlichen Ende automatisch entfernt. Prüfen Sie bei Problemen, ob die Audiodatei korrekt abgespielt werden kann und ob die Anwendung einen Fehlerdialog anzeigt.
 
 ## Tipps
 
 1. Verwenden Sie unterschiedliche Farben für verschiedene Jingle-Gruppen.
-2. Verwenden Sie kurze und eindeutige Button-Texte.
-3. Gleichen Sie unterschiedlich laute Jingles über die individuellen Lautstärke-Regler an.
-4. Nutzen Sie die vier Button-Reihen, um Jingles thematisch zu gruppieren.
-5. Legen Sie einen Standard-Dateipfad fest, wenn sich Ihre Audiodateien überwiegend im selben Ordner befinden.
-6. Sichern Sie bei wichtigen Konfigurationen regelmäßig die Datei `jingleplayer_settings.json`.
+2. Verwenden Sie kurze, eindeutige Kacheltexte.
+3. Gleichen Sie unterschiedlich laute Jingles über ihre individuellen dB-Einstellungen an.
+4. Nutzen Sie die fünf Reihen, um Jingles thematisch zu gruppieren.
+5. Sichern Sie bei wichtigen Konfigurationen regelmäßig `jingleplayer_settings.json` und vorhandene Migrationsbackups.
 
----
+## Technische Kurzinfo
 
-## Technische Informationen
-
-Jingleplayer verwendet pygame für die Audiowiedergabe.
-
-Die aktuelle Audio-Engine verwaltet laufende Jingles über separate Mixer-Kanäle. Dadurch können mehrere Jingles gleichzeitig abgespielt und unabhängig voneinander gestoppt beziehungsweise ausgeblendet werden.
-
-Audiodateien werden intern zwischengespeichert, sodass dieselbe Datei nicht bei jedem Start erneut geladen werden muss.
-
-Weitere technische Informationen zur Audio-Engine befinden sich in:
-
-`AUDIO_ENGINE.md`
-
----
-
-## Kontakt & Support
-
-Bei Problemen können die Konsolenausgaben des Programms zusätzliche Hinweise zur Fehlerursache liefern.
-
----
+Jingleplayer verwendet pygame für die Audiowiedergabe und PySide6 für die Benutzeroberfläche. Laufende Jingles werden über getrennte Mixer-Kanäle verwaltet, sodass sie gleichzeitig abgespielt und unabhängig voneinander gestoppt oder ausgeblendet werden können.
 
 **Stand:** September 2026
+
 **Anwendung:** Jingleplayer
