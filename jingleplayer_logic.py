@@ -8,6 +8,8 @@ except Exception as _e:
 
 import os
 import json
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 # Konstanten definieren für Lesbarkeit und Wartung
@@ -27,6 +29,8 @@ MIXER_SIZE = -16
 MIXER_OUTPUT_CHANNELS = 2
 MIXER_BUFFER = 512
 MIXER_CHANNEL_COUNT = DEFAULT_BUTTON_COUNT
+CURRENT_SCHEMA_VERSION = 2
+PRE_PYSIDE6_BACKUP_NAME = "jingleplayer_settings.pre-pyside6.json"
 
 # Variable, um den aktuellen Status des Players zu speichern
 current_jingle = None
@@ -45,6 +49,12 @@ fadeout_duration = DEFAULT_FADEOUT_DURATION
 button_height = DEFAULT_BUTTON_HEIGHT
 set_volume = DEFAULT_VOLUME
 settings = {}
+_loaded_settings_path = None
+_settings_snapshot = None
+_original_settings_bytes = None
+_backup_required = False
+_write_blocked_error = None
+_source_exists = False
 
 # Pfad für die Einstellungen im Benutzerverzeichnis
 data_dir = Path.home() / ".jingleplayer"
@@ -105,55 +115,214 @@ def _normalize_buttons_per_row(per_row):
         return [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT
     return normalized
 
-# Einstellungen laden
-def load_settings():
-    default_settings = {
+
+def _default_settings():
+    return {
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "buttons": {
             "texts": _default_button_texts(),
             "colors": ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT,
             "paths": [""] * DEFAULT_BUTTON_COUNT,
             "volumes": [0] * DEFAULT_BUTTON_COUNT,
-            "per_row": [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT  # Default buttons per row for 5 rows
+            "per_row": [DEFAULT_BUTTONS_PER_ROW_COUNT] * DEFAULT_BUTTON_ROW_COUNT,
         },
         "fadeout_duration": DEFAULT_FADEOUT_DURATION,
         "button_height": DEFAULT_BUTTON_HEIGHT,
         "window_size": [DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT],
         "volume": DEFAULT_VOLUME,
-        "last_folder": str(Path.home())
+        "last_folder": str(Path.home()),
     }
-    if settings_file.exists():
+
+
+def _validate_settings_data(raw_settings):
+    if not isinstance(raw_settings, dict):
+        raise ValueError("Das Settings-JSON muss ein Objekt enthalten.")
+    raw_buttons = raw_settings.get("buttons")
+    if raw_buttons is not None and not isinstance(raw_buttons, dict):
+        raise ValueError("Der Settings-Eintrag 'buttons' muss ein Objekt enthalten.")
+    version = raw_settings.get("schema_version")
+    if version is not None and (not isinstance(version, int) or isinstance(version, bool)):
+        raise ValueError("Die schema_version muss eine Ganzzahl sein.")
+    if version is not None and version > CURRENT_SCHEMA_VERSION:
+        raise ValueError(f"Die Settingsdatei verwendet die nicht unterstützte schema_version {version}.")
+    return version
+
+
+def _normalize_settings_data(raw_settings):
+    _validate_settings_data(raw_settings)
+    raw_buttons = raw_settings.get("buttons")
+
+    normalized = deepcopy(raw_settings)
+    normalized.pop("background_image", None)
+    defaults = _default_settings()
+    for key, value in defaults.items():
+        if key not in normalized:
+            normalized[key] = deepcopy(value)
+
+    buttons = deepcopy(raw_buttons) if raw_buttons is not None else {}
+    buttons["per_row"] = _normalize_buttons_per_row(buttons.get("per_row"))
+    buttons["texts"] = _normalize_button_slots(buttons.get("texts"), _default_button_texts())
+    buttons["colors"] = _normalize_button_slots(
+        buttons.get("colors"), ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT
+    )
+    buttons["paths"] = _normalize_button_slots(buttons.get("paths"), [""] * DEFAULT_BUTTON_COUNT)
+    buttons["volumes"] = _normalize_button_slots(buttons.get("volumes"), [0] * DEFAULT_BUTTON_COUNT)
+    normalized["buttons"] = buttons
+    normalized["schema_version"] = CURRENT_SCHEMA_VERSION
+    return normalized
+
+
+def _set_persistence_state(path, snapshot, original_bytes, backup_required, error, source_exists):
+    global _loaded_settings_path, _settings_snapshot, _original_settings_bytes
+    global _backup_required, _write_blocked_error, _source_exists
+    _loaded_settings_path = Path(path)
+    _settings_snapshot = deepcopy(snapshot)
+    _original_settings_bytes = original_bytes
+    _backup_required = bool(backup_required)
+    _write_blocked_error = error
+    _source_exists = bool(source_exists)
+
+
+def _save_result(success, skipped=False, error=None):
+    return {"success": bool(success), "skipped": bool(skipped), "error": error}
+
+
+def _backup_path():
+    return settings_file.with_name(PRE_PYSIDE6_BACKUP_NAME)
+
+
+def _ensure_migration_backup():
+    backup_path = _backup_path()
+    original_bytes = _original_settings_bytes
+    backup_created = False
+    if original_bytes is None:
+        return "Die Originaldaten der Settingsdatei sind nicht für ein Backup verfügbar."
+    try:
+        if backup_path.exists():
+            if backup_path.read_bytes() != original_bytes:
+                return f"Das vorhandene Migrationsbackup {backup_path} gehört zu einer anderen Settingsdatei."
+            return None
         try:
-            with open(settings_file, "r") as f:
-                loaded_settings = json.load(f)
-            loaded_settings = check_and_set_defaults(loaded_settings, default_settings)
-            # remove leftover background_image key if present (feature removed)
-            if 'background_image' in loaded_settings:
-                loaded_settings.pop('background_image', None)
-            buttons = loaded_settings["buttons"]
-            buttons["per_row"] = _normalize_buttons_per_row(buttons.get("per_row"))
-            buttons["texts"] = _normalize_button_slots(buttons.get("texts"), _default_button_texts())
-            buttons["colors"] = _normalize_button_slots(
-                buttons.get("colors"), ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT
-            )
-            buttons["paths"] = _normalize_button_slots(buttons.get("paths"), [""] * DEFAULT_BUTTON_COUNT)
-            buttons["volumes"] = _normalize_button_slots(buttons.get("volumes"), [0] * DEFAULT_BUTTON_COUNT)
-            return loaded_settings
-        except FileNotFoundError: # Spezifischere Exception Behandlung
-            print(f"Einstellungsdatei {settings_file} nicht gefunden. Standardeinstellungen werden verwendet.")
+            with open(backup_path, "xb") as backup_file:
+                backup_created = True
+                backup_file.write(original_bytes)
+                backup_file.flush()
+                os.fsync(backup_file.fileno())
+        except FileExistsError:
+            if backup_path.read_bytes() != original_bytes:
+                return f"Das vorhandene Migrationsbackup {backup_path} gehört zu einer anderen Settingsdatei."
+        return None
+    except OSError as error:
+        if backup_created:
+            try:
+                backup_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return f"Das Migrationsbackup konnte nicht erstellt oder geprüft werden: {error}"
+
+
+def _inspect_unloaded_settings_path():
+    """Establish safe persistence metadata when save is called without a prior load."""
+    try:
+        if not settings_file.exists():
+            _set_persistence_state(settings_file, None, None, False, None, False)
+            return
+        original_bytes = settings_file.read_bytes()
+        raw_settings = json.loads(original_bytes.decode("utf-8"))
+        version = _validate_settings_data(raw_settings)
+        _normalize_settings_data(raw_settings)
+        _set_persistence_state(
+            settings_file,
+            None,
+            original_bytes,
+            version is None or version < CURRENT_SCHEMA_VERSION,
+            None,
+            True,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        _set_persistence_state(
+            settings_file, None, None, False, f"Die Settingsdatei konnte nicht sicher gelesen werden: {error}", True
+        )
+
+# Einstellungen laden
+def load_settings():
+    default_settings = _default_settings()
+    try:
+        if not settings_file.exists():
+            _set_persistence_state(settings_file, default_settings, None, False, None, False)
             return default_settings
-        except (IOError, json.JSONDecodeError, ValueError) as e: # Allgemeine Fehlerbehandlung
-            print(f"Fehler beim Lesen der Datei {settings_file}: {e}")
-            return default_settings
-    return default_settings
+        original_bytes = settings_file.read_bytes()
+        raw_settings = json.loads(original_bytes.decode("utf-8"))
+        version = _validate_settings_data(raw_settings)
+        normalized = _normalize_settings_data(raw_settings)
+        _set_persistence_state(
+            settings_file,
+            normalized,
+            original_bytes,
+            version is None or version < CURRENT_SCHEMA_VERSION,
+            None,
+            True,
+        )
+        return normalized
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        message = f"Die Settingsdatei konnte nicht sicher gelesen werden: {error}"
+        _set_persistence_state(settings_file, default_settings, None, False, message, True)
+        print(message)
+        return default_settings
 
 # Einstellungen speichern
 def save_settings(current_settings): # Nimmt die aktuellen Einstellungen als Argument
+    global settings, _loaded_settings_path, _settings_snapshot, _original_settings_bytes
+    global _backup_required, _source_exists
+    if _loaded_settings_path != settings_file:
+        _inspect_unloaded_settings_path()
+    if _write_blocked_error:
+        return _save_result(False, error=_write_blocked_error)
     try:
-        with open(settings_file, "w") as f:
-            json.dump(current_settings, f, indent=4)
-        print("Einstellungen gespeichert.") # Feedback für erfolgreiches Speichern
-    except IOError:
-        print(f"Die Datei {settings_file} konnte nicht gespeichert werden. Überprüfen Sie die Berechtigungen.")
+        normalized = _normalize_settings_data(current_settings)
+        if _source_exists and _settings_snapshot is not None and normalized == _settings_snapshot:
+            return _save_result(True, skipped=True)
+        serialized = json.dumps(normalized, indent=4, ensure_ascii=False).encode("utf-8")
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        if _backup_required:
+            backup_error = _ensure_migration_backup()
+            if backup_error:
+                return _save_result(False, error=backup_error)
+
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=settings_file.parent,
+                prefix=f".{settings_file.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as temporary_file:
+                temporary_path = Path(temporary_file.name)
+                temporary_file.write(serialized)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.replace(temporary_path, settings_file)
+        except Exception:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
+
+        settings = deepcopy(normalized)
+        _loaded_settings_path = Path(settings_file)
+        _settings_snapshot = deepcopy(normalized)
+        _original_settings_bytes = serialized
+        _backup_required = False
+        _source_exists = True
+        print("Einstellungen gespeichert.")
+        return _save_result(True)
+    except (OSError, TypeError, ValueError) as error:
+        message = f"Die Settingsdatei konnte nicht sicher gespeichert werden: {error}"
+        print(message)
+        return _save_result(False, error=message)
 
 def calculate_effective_volume(global_percent, button_db):
     """Convert global percent and a per-button dB offset to pygame's 0..1 range."""
@@ -362,19 +531,37 @@ def get_current_settings():
     global settings, button_texts, button_colors, jingle_paths, buttons_per_row, fadeout_duration, button_height, set_volume
     # Fallback für window_size, falls nicht vorhanden
     window_size = settings.get("window_size", [DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT])
-    return {
-        "buttons": {
-            "texts": button_texts[:],
-            "colors": button_colors[:],
-            "paths": jingle_paths[:],
-            "volumes": button_volumes[:],
-            "per_row": buttons_per_row[:]
-        },
+    current = deepcopy(settings) if isinstance(settings, dict) else {}
+    current_buttons = current.get("buttons")
+    if not isinstance(current_buttons, dict):
+        current_buttons = {}
+    current_buttons.update({
+        "texts": button_texts[:],
+        "colors": button_colors[:],
+        "paths": jingle_paths[:],
+        "volumes": button_volumes[:],
+        "per_row": buttons_per_row[:],
+    })
+    current.update({
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "buttons": current_buttons,
         "fadeout_duration": fadeout_duration,
         "button_height": button_height,
         "window_size": window_size[:],
         "volume": set_volume,
-        "last_folder": settings.get("last_folder", str(Path.home()))
+        "last_folder": settings.get("last_folder", str(Path.home())),
+    })
+    current.pop("background_image", None)
+    return current
+
+
+def get_settings_persistence_status():
+    """Return read-only state needed by GUIs to report persistence problems."""
+    return {
+        "write_blocked": _write_blocked_error is not None,
+        "error": _write_blocked_error,
+        "backup_required": _backup_required,
+        "source_exists": _source_exists,
     }
 
 def update_settings_data(texts, colors, paths, per_row, f_duration, b_height, w_size, vol):
