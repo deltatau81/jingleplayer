@@ -1,6 +1,6 @@
 # Jingleplayer
 
-Jingleplayer is a Windows desktop application for playing configurable audio jingles. The production interface uses PySide6, while pygame provides MP3 and WAV playback.
+Jingleplayer is a Windows desktop soundboard and jingle player built with Python, PySide6, and pygame. It provides configurable jingle buttons across up to 50 persistent slots, simultaneous playback, individual jingle volume, fadeout, and persistent settings.
 
 ## Project structure
 
@@ -151,3 +151,32 @@ dist\Jingleplayer.exe
 ```
 
 The root-level historical `.spec` files are not the authoritative build procedure.
+
+## Changing the application icon
+
+The application icon is:
+
+```text
+assets\jingleplayer.ico
+```
+
+To use another icon:
+
+1. Create or obtain a Windows `.ico` file.
+2. Replace `assets\jingleplayer.ico` with the new file.
+3. Keep the filename `jingleplayer.ico`.
+4. Rebuild the application:
+
+   ```powershell
+   .\build_windows.ps1
+   ```
+
+The resulting executable is:
+
+```text
+dist\Jingleplayer.exe
+```
+
+The same icon file is used by the PySide6 application window and the packaged Windows executable. For good results at different display scales, use a multi-resolution ICO containing common sizes such as 16x16, 32x32, 48x48, 128x128, and 256x256.
+
+Windows may cache executable icons, so File Explorer or the taskbar may temporarily continue to display the previous icon after replacement.
