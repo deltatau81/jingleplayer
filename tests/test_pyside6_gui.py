@@ -883,7 +883,137 @@ def test_settings_dialog_shows_editable_audio_and_layout_values(qt_app):
         "per_row": [8, 5, 6, 4, 9],
         "button_height": 3,
     }
+    assert dialog.help_button.text() == "Hilfe"
+    assert dialog.help_button.isEnabled()
+    dialog.show()
+    qt_app.processEvents()
+    assert dialog.help_button.isVisible()
     dialog.reject()
+
+
+def test_help_dialog_loads_markdown_through_resource_path(
+    qt_app, tmp_path, monkeypatch
+):
+    help_path = tmp_path / "controlled-help.md"
+    help_path.write_text("# Testhilfe\n\nKontrollierter Inhalt", encoding="utf-8")
+    requested_paths = []
+
+    def resolve(relative_path):
+        requested_paths.append(relative_path)
+        return help_path
+
+    monkeypatch.setattr(gui, "resource_path", resolve)
+    parent = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+    dialog = gui.HelpDialog(parent)
+
+    assert dialog.parent() is parent
+    assert dialog.windowTitle() == "Hilfe"
+    assert dialog.text_browser.isReadOnly()
+    assert "Testhilfe" in dialog.text_browser.toPlainText()
+    assert "Kontrollierter Inhalt" in dialog.text_browser.toPlainText()
+    assert requested_paths == ["HELP.md"]
+    assert dialog.close_button.text() == "Schließen"
+    dialog.reject()
+    parent.reject()
+
+
+def test_help_button_opens_parented_dialog_without_closing_settings(
+    qt_app, monkeypatch
+):
+    opened = []
+
+    class HelpDialogProbe:
+        def __init__(self, parent):
+            opened.append(("parent", parent))
+
+        def exec(self):
+            opened.append(("exec", None))
+            return gui.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(gui, "HelpDialog", HelpDialogProbe)
+    dialog = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+    dialog.show()
+    qt_app.processEvents()
+
+    dialog.help_button.click()
+
+    assert opened == [("parent", dialog), ("exec", None)]
+    assert dialog.isVisible()
+    assert dialog.result() != gui.QDialog.DialogCode.Accepted
+    dialog.reject()
+
+
+def test_missing_help_file_warns_once_and_dialog_remains_usable(
+    qt_app, tmp_path, monkeypatch
+):
+    warnings = []
+    monkeypatch.setattr(gui, "resource_path", lambda relative_path: tmp_path / "missing.md")
+    monkeypatch.setattr(gui.QMessageBox, "warning", lambda *args: warnings.append(args))
+    parent = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+
+    dialog = gui.HelpDialog(parent)
+
+    assert len(warnings) == 1
+    assert warnings[0][0] is dialog
+    assert warnings[0][1] == "Hilfe konnte nicht geladen werden"
+    assert "Hilfedatei konnte nicht gelesen werden" in warnings[0][2]
+    assert dialog.text_browser.isReadOnly()
+    dialog.close_button.click()
+    assert dialog.result() == gui.QDialog.DialogCode.Accepted
+    parent.reject()
+
+
+def test_help_does_not_touch_settings_and_save_still_works(
+    qt_app, monkeypatch
+):
+    saves = []
+    updates = []
+
+    class HelpDialogProbe:
+        def __init__(self, parent):
+            self.parent = parent
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(gui, "HelpDialog", HelpDialogProbe)
+    monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", saves.append)
+    monkeypatch.setattr(gui.jingleplayer_logic, "update_settings_data", lambda *args: updates.append(args))
+    dialog = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+
+    dialog.help_button.click()
+
+    assert saves == []
+    assert updates == []
+    assert dialog.result() != gui.QDialog.DialogCode.Accepted
+    dialog.fadeout_spin.setValue(900)
+    dialog.button_box.button(gui.QDialogButtonBox.StandardButton.Save).click()
+    assert dialog.result() == gui.QDialog.DialogCode.Accepted
+    assert dialog.get_values()["fadeout_duration"] == 900
+
+
+def test_cancel_after_help_rejects_without_persistence(qt_app, monkeypatch):
+    saves = []
+    updates = []
+
+    class HelpDialogProbe:
+        def __init__(self, parent):
+            self.parent = parent
+
+        def exec(self):
+            return gui.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(gui, "HelpDialog", HelpDialogProbe)
+    monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", saves.append)
+    monkeypatch.setattr(gui.jingleplayer_logic, "update_settings_data", lambda *args: updates.append(args))
+    dialog = gui.SettingsDialog(750, [2, 0, 0, 0, 0], 3)
+
+    dialog.help_button.click()
+    dialog.button_box.button(gui.QDialogButtonBox.StandardButton.Cancel).click()
+
+    assert dialog.result() == gui.QDialog.DialogCode.Rejected
+    assert saves == []
+    assert updates == []
 
 
 def test_settings_button_opens_modal_dialog(qt_app, isolated_settings, monkeypatch):

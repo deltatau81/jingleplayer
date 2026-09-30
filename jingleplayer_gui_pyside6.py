@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -220,6 +221,35 @@ class JingleEditDialog(QDialog):
         }
 
 
+class HelpDialog(QDialog):
+    """Display the bundled user manual without requiring an external app."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Hilfe")
+        self.resize(700, 600)
+
+        self.text_browser = QTextBrowser(self)
+        help_path = resource_path("HELP.md")
+        try:
+            help_text = help_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            QMessageBox.warning(
+                self,
+                "Hilfe konnte nicht geladen werden",
+                f"Die Hilfedatei konnte nicht gelesen werden: {error}",
+            )
+        else:
+            self.text_browser.setMarkdown(help_text)
+
+        self.close_button = QPushButton("Schließen", self)
+        self.close_button.clicked.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.text_browser, 1)
+        layout.addWidget(self.close_button)
+
+
 class SettingsDialog(QDialog):
     """Application settings for audio and the visible jingle layout."""
 
@@ -258,10 +288,17 @@ class SettingsDialog(QDialog):
         self.button_box.accepted.connect(self._validate_and_accept)
         self.button_box.rejected.connect(self.reject)
 
+        self.help_button = QPushButton("Hilfe", self)
+        self.help_button.clicked.connect(self._open_help_dialog)
+
         dialog_layout = QVBoxLayout(self)
         dialog_layout.addWidget(audio_group)
         dialog_layout.addWidget(layout_group)
+        dialog_layout.addWidget(self.help_button)
         dialog_layout.addWidget(self.button_box)
+
+    def _open_help_dialog(self):
+        HelpDialog(self).exec()
 
     def _validate_and_accept(self):
         if sum(spin.value() for spin in self.per_row_spins) == 0:
