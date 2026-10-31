@@ -39,6 +39,22 @@ jobs:
           SDL_VIDEODRIVER: dummy
         run: python -m pytest -q
 
+      - name: Build and validate macOS application
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'printf "Build or validation failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2; ls -la dist/macos/arm64 dist/macos/arm64/Jingleplayer.app/Contents dist/macos/arm64/Jingleplayer.app/Contents/MacOS >&2 || true' ERR
+          bash build_macos.sh
+          app="dist/macos/arm64/Jingleplayer.app"
+          executable="$app/Contents/MacOS/Jingleplayer"
+          test -d "$app"
+          test -f "$executable"
+          test -x "$executable"
+          plutil -lint "$app/Contents/Info.plist"
+          file "$executable"
+          lipo -archs "$executable"
+          lipo "$executable" -verify_arch arm64
+
   x86_64:
     name: Native x86_64 / Python 3.11
     runs-on: macos-15-intel
@@ -70,3 +86,19 @@ jobs:
           SDL_AUDIODRIVER: dummy
           SDL_VIDEODRIVER: dummy
         run: python -m pytest -q
+
+      - name: Build and validate macOS application
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          trap 'printf "Build or validation failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2; ls -la dist/macos/x86_64 dist/macos/x86_64/Jingleplayer.app/Contents dist/macos/x86_64/Jingleplayer.app/Contents/MacOS >&2 || true' ERR
+          bash build_macos.sh
+          app="dist/macos/x86_64/Jingleplayer.app"
+          executable="$app/Contents/MacOS/Jingleplayer"
+          test -d "$app"
+          test -f "$executable"
+          test -x "$executable"
+          plutil -lint "$app/Contents/Info.plist"
+          file "$executable"
+          lipo -archs "$executable"
+          lipo "$executable" -verify_arch x86_64
