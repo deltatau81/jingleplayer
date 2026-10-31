@@ -55,6 +55,27 @@ jobs:
           lipo -archs "$executable"
           lipo "$executable" -verify_arch arm64
 
+      - name: Package and validate arm64 ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="dist/macos/arm64/Jingleplayer.app"
+          archive="dist/macos/arm64/Jingleplayer-macOS-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+          test -f "$archive"
+          test -s "$archive"
+          unzip -t "$archive"
+          stat -f 'ZIP size: %z bytes' "$archive"
+          shasum -a 256 "$archive"
+
+      - name: Upload arm64 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jingleplayer-macOS-arm64
+          path: dist/macos/arm64/Jingleplayer-macOS-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+
   x86_64:
     name: Native x86_64 / Python 3.11
     runs-on: macos-15-intel
@@ -102,3 +123,24 @@ jobs:
           file "$executable"
           lipo -archs "$executable"
           lipo "$executable" -verify_arch x86_64
+
+      - name: Package and validate x86_64 ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="dist/macos/x86_64/Jingleplayer.app"
+          archive="dist/macos/x86_64/Jingleplayer-macOS-x86_64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
+          test -f "$archive"
+          test -s "$archive"
+          unzip -t "$archive"
+          stat -f 'ZIP size: %z bytes' "$archive"
+          shasum -a 256 "$archive"
+
+      - name: Upload x86_64 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jingleplayer-macOS-x86_64
+          path: dist/macos/x86_64/Jingleplayer-macOS-x86_64.zip
+          if-no-files-found: error
+          retention-days: 14
