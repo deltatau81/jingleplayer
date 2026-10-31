@@ -1,0 +1,72 @@
+name: macOS tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    name: Native arm64 / Python 3.11
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 arm64
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: arm64
+
+      - name: Verify native architecture and Python version
+        shell: bash
+        run: |
+          test "$(uname -m)" = "arm64"
+          python -c 'import platform, sys; print(sys.version); print(platform.machine()); assert platform.machine() == "arm64"; assert sys.version_info[:2] == (3, 11)'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Check dependencies
+        run: python -m pip check
+
+      - name: Run existing tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SDL_AUDIODRIVER: dummy
+          SDL_VIDEODRIVER: dummy
+        run: python -m pytest -q
+
+  x86_64:
+    name: Native x86_64 / Python 3.11
+    runs-on: macos-15-intel
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      - name: Verify native architecture and Python version
+        shell: bash
+        run: |
+          test "$(uname -m)" = "x86_64"
+          python -c 'import platform, sys; print(sys.version); print(platform.machine()); assert platform.machine() == "x86_64"; assert sys.version_info[:2] == (3, 11)'
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Check dependencies
+        run: python -m pip check
+
+      - name: Run existing tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          SDL_AUDIODRIVER: dummy
+          SDL_VIDEODRIVER: dummy
+        run: python -m pytest -q
