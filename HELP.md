@@ -41,6 +41,12 @@ Jedes Preset hat seine eigene Zuordnung. Duplizieren übernimmt sie; neue Preset
 beginnen ohne Bild. Beim Wechsel und Neustart wird die passende Zuordnung geladen.
 Das Bild füllt den Kachelbereich ohne Verzerrung, überstehende Teile werden mittig
 abgeschnitten. Fenstergrößenänderungen verwenden das geladene Bild weiter.
+Alle Kacheln haben eine neutrale, dunkle Innenfläche mit etwa 35 % Deckkraft.
+Eigene Buttonfarben bleiben gespeichert und färben nur den deckenden, 3 Pixel
+breiten Rahmen. Das Bild scheint durch die Buttonreihen hindurch. Weiße Texte
+mit dunklem Schatten bleiben lesbar. Hover macht den Rahmen heller und breiter;
+Fokus zeigt einen gestrichelten Rahmen, Drücken dunkelt die Fläche ab. Wiedergabe
+zeigt einen breiten Doppelrahmen, bei Fokus einen breiten gestrichelten Rahmen.
 Buttonfarben, Texte und Klicks bleiben erhalten; der Spielindikator kontrastiert
 mit der Buttonfarbe. Lautstärkeregler, Menüs und Dialoge werden nicht überlagert.
 

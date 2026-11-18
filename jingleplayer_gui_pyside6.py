@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGroupBox,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -87,6 +88,11 @@ class BackgroundCanvas(QWidget):
         self._scaled_for = None
         self.update()
 
+    def resizeEvent(self, event):
+        self._scaled_for = None
+        super().resizeEvent(event)
+        self.update()
+
     def paintEvent(self, event):
         super().paintEvent(event)
         if self.pixmap.isNull() or self.width() <= 0 or self.height() <= 0:
@@ -115,6 +121,7 @@ class BackgroundCanvas(QWidget):
             self._scaled_for = key
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self._scaled)
+        painter.end()
 
 
 class PackageJob(QThread):
@@ -163,16 +170,18 @@ class JingleTile(QFrame):
         self.jingle_text = str(text)
         self.jingle_color = str(background_color)
         self.playing = False
+        self._pressed = False
 
         self.display_color = QColor(self.jingle_color)
         if not self.display_color.isValid():
-            self.display_color = QColor("#f0f0f0")
+            self.display_color = QColor("#555555")
 
         self.setObjectName("jingleTile")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(64)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._apply_style()
 
         layout = QVBoxLayout(self)
@@ -182,21 +191,36 @@ class JingleTile(QFrame):
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setWordWrap(True)
         self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.text_shadow = QGraphicsDropShadowEffect(self.label)
+        self.text_shadow.setOffset(0, 0)
+        self.text_shadow.setBlurRadius(4)
+        self.label.setGraphicsEffect(self.text_shadow)
+        self.text_shadow.setColor(QColor("black"))
         self.label.setStyleSheet(
-            f"color: {contrasting_text_color(self.display_color.name())};"
+            "color: #ffffff;"
             "font-weight: 600;"
             "background: transparent;"
         )
         layout.addWidget(self.label)
 
     def _apply_style(self):
-        indicator_color = contrasting_text_color(self.display_color.name())
-        border = f"3px solid {indicator_color}" if self.playing else "1px solid rgba(0, 0, 0, 45)"
+        # Stored color affects only the opaque border, never the image overlay.
+        color = self.display_color.name()
+        playing_color = self.display_color.lighter(145).name()
+        border = f"6px double {playing_color}" if self.playing else f"3px solid {color}"
+        alpha = 140 if self._pressed else 90
         self.setStyleSheet(
             "QFrame#jingleTile {"
-            f"background-color: {self.display_color.name()};"
+            f"background-color: rgba(15, 18, 22, {alpha});"
             f"border: {border};"
             "border-radius: 8px;"
+            "}"
+            "QFrame#jingleTile:hover {"
+            f"border: {'6px double' if self.playing else '4px solid'} "
+            f"{self.display_color.lighter(165 if self.playing else 125).name()};"
+            "}"
+            "QFrame#jingleTile:focus {"
+            f"border: {6 if self.playing else 3}px dashed {self.display_color.lighter(160).name()};"
             "}"
         )
 
@@ -209,16 +233,24 @@ class JingleTile(QFrame):
         self.jingle_color = str(background_color)
         self.display_color = QColor(self.jingle_color)
         if not self.display_color.isValid():
-            self.display_color = QColor("#f0f0f0")
+            self.display_color = QColor("#555555")
         self.label.setText(self.jingle_text)
         self.label.setStyleSheet(
-            f"color: {contrasting_text_color(self.display_color.name())};"
+            "color: #ffffff;"
             "font-weight: 600;"
             "background: transparent;"
         )
         self._apply_style()
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self._apply_style()
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event):
+        self._pressed = False
+        self._apply_style()
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
             self.clicked.emit(self.jingle_index)
             event.accept()
@@ -1054,6 +1086,7 @@ class JingleplayerMainWindow(QMainWindow):
     def _rebuild_jingle_layout(self):
         for row_widget in self.row_widgets:
             self.tile_layout.removeWidget(row_widget)
+            row_widget.hide()
             row_widget.deleteLater()
         self.row_widgets = []
         self.row_layouts = []
@@ -1065,6 +1098,7 @@ class JingleplayerMainWindow(QMainWindow):
 
         for row_index in range(jingleplayer_logic.DEFAULT_BUTTON_ROW_COUNT):
             row_widget = QWidget(self.background_canvas)
+            row_widget.setAutoFillBackground(False)
             row_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)

@@ -129,7 +129,13 @@ her und löscht keine Bilddatei. Im Menü steht der aktuell gespeicherte Bildpfa
 Preset-Wechsel und Neustart übernehmen die jeweilige Einstellung automatisch.
 
 Die Darstellung füllt den Kachelbereich proportional aus und beschneidet mittig;
-Resize skaliert das bereits geladene Bild. Buttonfarben und Bedienung bleiben
+Resize skaliert das bereits geladene Bild anhand der aktuellen Hintergrundfläche.
+Alle Kacheln haben dieselbe neutrale Innenfläche (`rgba(15, 18, 22, 90)`, etwa
+35 % Deckkraft). Individuelle Farben erscheinen nur im deckenden, 3 Pixel breiten
+Rahmen und bleiben unverändert gespeichert. Die Schrift ist weiß mit dunklem
+Schatten. Hover verbreitert und erhellt den Rahmen; Fokus zeigt einen gestrichelten
+Rahmen, Drücken dunkelt die Fläche ab. Wiedergabe zeigt einen helleren, breiten
+Doppelrahmen, bei Fokus einen breiten gestrichelten Rahmen. Buttonnummern und Bedienung bleiben
 erhalten, Menüs und Lautstärkeregler liegen außerhalb der Bildfläche. Fehlende oder
 beschädigte Bilder führen zum normalen Hintergrund mit Statusmeldung; der Pfad
 bleibt gespeichert. Schema 3 bleibt unverändert nummeriert, das Feld ist optional.

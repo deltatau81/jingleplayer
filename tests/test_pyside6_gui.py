@@ -203,9 +203,9 @@ def test_tiles_use_saved_texts_and_colors(qt_app, isolated_settings):
 
     assert [tile.label.text() for tile in window.jingle_tiles] == ["Sweet Caroline", "völlig losgelöst"]
     assert [tile.jingle_color for tile in window.jingle_tiles] == ["#0080ff", "#ffff00"]
-    assert "background-color: #0080ff" in window.jingle_tiles[0].styleSheet()
+    assert "border: 3px solid #0080ff" in window.jingle_tiles[0].styleSheet()
     assert window.jingle_tiles[0].label.styleSheet().startswith("color: #ffffff")
-    assert window.jingle_tiles[1].label.styleSheet().startswith("color: #111111")
+    assert window.jingle_tiles[1].label.styleSheet().startswith("color: #ffffff")
 
     window.close()
     qt_app.processEvents()
@@ -383,8 +383,8 @@ def test_playing_border_preserves_saved_background_color(qt_app, isolated_settin
 
     tile.clicked.emit(1)
 
-    assert "background-color: #ff0000" in tile.styleSheet()
-    assert "border: 3px solid #ffffff" in tile.styleSheet()
+    assert "background-color: rgba(15, 18, 22, 90)" in tile.styleSheet()
+    assert "border: 6px double #ff7373" in tile.styleSheet()
 
     window.close()
 
@@ -718,9 +718,9 @@ def test_accepted_edit_updates_runtime_tile_engine_and_complete_settings(
     assert window.jingle_volumes == [7, 4]
     assert tile.label.text() == "Changed A"
     assert tile.playing is True
-    assert "background-color: #00ff00" in tile.styleSheet()
-    assert "border: 3px solid #ffffff" in tile.styleSheet()
-    assert tile.label.styleSheet().startswith(f"color: {gui.contrasting_text_color('#00ff00')}")
+    assert "background-color: rgba(15, 18, 22, 90)" in tile.styleSheet()
+    assert "border: 6px double #73ff73" in tile.styleSheet()
+    assert tile.label.styleSheet().startswith("color: #ffffff")
     assert window.jingle_tiles[1].label.text() == "B"
     assert window.jingle_tiles[1].jingle_color == "blue"
     assert volume_calls == [(1, 7)]
@@ -736,8 +736,8 @@ def test_accepted_edit_updates_runtime_tile_engine_and_complete_settings(
     assert saved_settings[0] == expected_settings
 
     tile.set_playing(False)
-    assert "background-color: #00ff00" in tile.styleSheet()
-    assert "border: 1px solid rgba(0, 0, 0, 45)" in tile.styleSheet()
+    assert "background-color: rgba(15, 18, 22, 90)" in tile.styleSheet()
+    assert "border: 3px solid #00ff00" in tile.styleSheet()
 
     tile.clicked.emit(1)
     assert audio_play_calls == [(1, "C:/Other/new.wav", 750)]

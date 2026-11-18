@@ -79,6 +79,7 @@ def test_choose_image_is_visible_persisted_and_restored(context, tmp_path, monke
 
 
 def test_duplicate_and_new_and_preset_switch_backgrounds(context, tmp_path, monkeypatch):
+    context.window.show()
     red = image_file(tmp_path)
     select_image(context, monkeypatch, red)
     original = logic.get_preset_settings()
@@ -97,9 +98,11 @@ def test_duplicate_and_new_and_preset_switch_backgrounds(context, tmp_path, monk
     assert logic.manage_presets("switch", original_id)["success"]
     context.window._reload_after_import()
     assert context.window.background_canvas.pixmap.toImage().pixelColor(0, 0) == QColor("red")
+    assert context.window.background_canvas.grab().toImage().pixelColor(0, 0) == QColor("red")
     assert logic.manage_presets("switch", blue_id)["success"]
     context.window._reload_after_import()
     assert context.window.background_canvas.pixmap.toImage().pixelColor(0, 0) == QColor("blue")
+    assert context.window.background_canvas.grab().toImage().pixelColor(0, 0) == QColor("blue")
     assert active(original)["background_image"] == str(red)
     assert len(logic.get_preset_settings()["presets"]) == 3
 
@@ -200,8 +203,8 @@ def test_oversized_image_header_rejected_before_decoding(context, tmp_path, monk
 def test_playing_indicator_contrasts_with_light_button(context):
     tile = gui.JingleTile(1, "White", "#ffffff")
     tile.set_playing(True)
-    assert "background-color: #ffffff" in tile.styleSheet()
-    assert "3px solid #111111" in tile.styleSheet()
+    assert "background-color: rgba(15, 18, 22, 90)" in tile.styleSheet()
+    assert "6px double #ffffff" in tile.styleSheet()
     tile.close()
 
 
@@ -253,7 +256,7 @@ def test_cover_center_crop_and_resize_use_cached_image(context, tmp_path, monkey
     canvas.close()
 
 
-def test_image_is_below_opaque_clickable_tiles_and_outside_toolbar(context, tmp_path, monkeypatch):
+def test_image_is_below_translucent_clickable_tiles_and_outside_toolbar(context, tmp_path, monkeypatch):
     path = image_file(tmp_path, color="yellow")
     select_image(context, monkeypatch, path)
     window = context.window
@@ -262,14 +265,179 @@ def test_image_is_below_opaque_clickable_tiles_and_outside_toolbar(context, tmp_
     assert window.volume_slider.parentWidget() == window.centralWidget()
     assert all(row.parentWidget() == window.background_canvas for row in window.row_widgets)
     tile = window.jingle_tiles[0]
-    image = tile.grab().toImage()
-    assert image.pixelColor(10, 10) == QColor("#123456")
+    image = window.background_canvas.grab().toImage()
+    origin = tile.mapTo(window.background_canvas, tile.rect().topLeft())
+    ratio = window.background_canvas.devicePixelRatioF()
+    pixel = image.pixelColor(round((origin.x() + 10) * ratio), round((origin.y() + 10) * ratio))
+    # Neutral overlay over the yellow image, independent of the saved color.
+    for actual, tint, background in zip(pixel.getRgb()[:3], (15, 18, 22), (255, 255, 0)):
+        assert abs(actual - (tint * 90 / 255 + background * 165 / 255)) <= 2
     calls = []
     monkeypatch.setattr(logic, "play_jingle", lambda *a: calls.append(a) or {"success": True})
     QTest.mouseClick(tile, Qt.MouseButton.LeftButton)
     assert calls and tile.playing
-    assert "3px solid #ffffff" in tile.styleSheet()
+    assert "6px double" in tile.styleSheet()
     assert tile.isVisible() and window.settings_button.isEnabled()
+
+
+@pytest.mark.parametrize("sizes", [((300, 100), (100, 300)), ((257, 173), (401, 199))])
+def test_cover_preserves_circle_geometry_across_resize(context, sizes):
+    image = QImage(400, 400, QImage.Format.Format_RGB32)
+    image.fill(QColor("white"))
+    painter = QPainter(image)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("black"))
+    painter.drawEllipse(170, 170, 60, 60)
+    painter.end()
+    canvas = gui.BackgroundCanvas(context.window)
+    canvas.set_background(QPixmap.fromImage(image))
+    for width, height in sizes:
+        canvas.resize(width, height)
+        rendered = canvas.grab().toImage()
+        points = [(x, y) for y in range(rendered.height()) for x in range(rendered.width())
+                  if rendered.pixelColor(x, y).red() < 50]
+        xs, ys = zip(*points)
+        diameter_x = max(xs) - min(xs) + 1
+        diameter_y = max(ys) - min(ys) + 1
+        assert abs(diameter_x - diameter_y) <= 2
+        expected = 60 * max(width / 400, height / 400) * canvas.devicePixelRatioF()
+        assert abs(diameter_x - expected) <= 2
+        assert abs((max(xs) + min(xs)) / 2 - rendered.width() / 2) <= 2
+        assert abs((max(ys) + min(ys)) / 2 - rendered.height() / 2) <= 2
+
+
+def test_resize_and_rebuild_use_actual_canvas_and_hide_old_rows(context, tmp_path, monkeypatch):
+    select_image(context, monkeypatch, image_file(tmp_path))
+    window = context.window
+    window.show()
+    context.app.processEvents()
+    monkeypatch.setattr(gui, "load_background_image", lambda *a: pytest.fail("unexpected disk read"))
+    old_rows = list(window.row_widgets)
+    window._rebuild_jingle_layout()
+    assert all(row.isHidden() for row in old_rows)
+    for size in ((1100, 650), (800, 800), (1200, 500)):
+        window.resize(*size)
+        context.app.processEvents()
+        canvas = window.background_canvas
+        assert canvas.height() < window.height()
+        assert not canvas.grab().isNull()
+        assert canvas._scaled_for == (canvas.size(), canvas.devicePixelRatioF())
+        assert canvas._scaled.size() == canvas.size() * canvas.devicePixelRatioF()
+        assert all(not row.autoFillBackground() for row in window.row_widgets)
+
+
+def test_neutral_fill_and_custom_borders_preserve_values_and_controls(context):
+    tile = gui.JingleTile(49, "Hidden number retained", "SystemButtonFace", context.window)
+    assert tile.jingle_index == 49
+    assert tile.jingle_color == "SystemButtonFace"
+    assert "rgba(15, 18, 22, 90)" in tile.styleSheet()
+    assert "border: 3px solid #555555" in tile.styleSheet()
+    assert tile.label.styleSheet().startswith("color: #ffffff")
+    assert tile.text_shadow.color() == QColor("black")
+    assert tile.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    assert ":hover" in tile.styleSheet() and ":focus" in tile.styleSheet()
+    tile.update_content("Custom", "#FFFF00")
+    assert tile.jingle_color == "#FFFF00"
+    assert "rgba(15, 18, 22, 90)" in tile.styleSheet()
+    assert "border: 3px solid #ffff00" in tile.styleSheet()
+    assert tile.label.styleSheet().startswith("color: #ffffff")
+    assert tile.text_shadow.color() == QColor("black")
+    clicked, edited = [], []
+    tile.clicked.connect(clicked.append)
+    tile.edit_requested.connect(edited.append)
+    tile.show()
+    QTest.mousePress(tile, Qt.MouseButton.LeftButton)
+    assert tile._pressed and "rgba(15, 18, 22, 140)" in tile.styleSheet()
+    QTest.mouseRelease(tile, Qt.MouseButton.LeftButton)
+    assert not tile._pressed and clicked == [49]
+    QTest.mouseClick(tile, Qt.MouseButton.RightButton)
+    assert edited == [49] and clicked == [49]
+    tile.set_playing(True)
+    assert "border: 6px double #ffff73" in tile.styleSheet()
+    tile.set_playing(False)
+    assert "border: 3px solid #ffff00" in tile.styleSheet()
+
+
+@pytest.mark.parametrize("background", ["white", "black", "blue"])
+@pytest.mark.parametrize("saved_color", ["SystemButtonFace", "#ffff00", "#123456", "#80ff0000"])
+def test_real_canvas_composites_neutral_fill_with_colored_border(context, background, saved_color):
+    window = context.window
+    image = QImage(20, 20, QImage.Format.Format_RGB32)
+    image.fill(QColor(background))
+    window.background_canvas.set_background(QPixmap.fromImage(image))
+    tile = window.jingle_tiles[0]
+    tile.update_content("Readable", saved_color)
+    window.show()
+    context.app.processEvents()
+    window.settings_button.setFocus()
+    QTest.mouseMove(window.settings_button, window.settings_button.rect().center())
+    context.app.processEvents()
+    rendered = window.background_canvas.grab().toImage()
+    origin = tile.mapTo(window.background_canvas, tile.rect().topLeft())
+    ratio = window.background_canvas.devicePixelRatioF()
+    pixel = rendered.pixelColor(round((origin.x() + 10) * ratio), round((origin.y() + 10) * ratio))
+    for actual, tint, base in zip(pixel.getRgb()[:3], (15, 18, 22), QColor(background).getRgb()[:3]):
+        assert abs(actual - (tint * 90 / 255 + base * 165 / 255)) <= 2
+    assert tile.jingle_color == saved_color
+    border = rendered.pixelColor(round((origin.x() + tile.width() / 2) * ratio), round((origin.y() + 1) * ratio))
+    assert border == QColor(tile.display_color.name())  # Stored alpha never makes the border translucent.
+
+
+def test_rendered_border_states_and_pressed_fill(context, monkeypatch):
+    window = context.window
+    tile = window.jingle_tiles[0]
+    tile.update_content("States", "#2468ac")
+    image = QImage(20, 20, QImage.Format.Format_RGB32)
+    image.fill(QColor("white"))
+    window.background_canvas.set_background(QPixmap.fromImage(image))
+    window.show()
+    window.activateWindow()
+    context.app.processEvents()
+    monkeypatch.setattr(logic, "play_jingle", lambda *a: {"success": True})
+
+    def pixel(x, y):
+        rendered = window.background_canvas.grab().toImage()
+        origin = tile.mapTo(window.background_canvas, tile.rect().topLeft())
+        ratio = window.background_canvas.devicePixelRatioF()
+        return rendered.pixelColor(round((origin.x() + x) * ratio), round((origin.y() + y) * ratio))
+
+    def leave_tile():
+        window.settings_button.setFocus()
+        QTest.mouseMove(window.settings_button, window.settings_button.rect().center())
+        context.app.processEvents()
+
+    leave_tile()
+    normal = pixel(tile.width() / 2, 1)
+    assert normal == QColor("#2468ac")
+    normal_fill = pixel(10, 10)
+    QTest.mouseMove(tile, tile.rect().center())
+    context.app.processEvents()
+    assert tile.underMouse()
+    assert pixel(tile.width() / 2, 1) == QColor(QColor("#2468ac").lighter(125).name())
+    # Hover increases width as well as brightness.
+    assert pixel(tile.width() / 2, 3) != normal_fill
+    hovered = window.background_canvas.grab().toImage()
+    tile.setFocus()
+    context.app.processEvents()
+    assert tile.hasFocus()
+    focused = window.background_canvas.grab().toImage()
+    assert focused != hovered
+    assert "3px dashed" in tile.styleSheet()
+    assert pixel(tile.width() / 2, 1) != normal
+    QTest.mousePress(tile, Qt.MouseButton.LeftButton)
+    assert tile._pressed
+    assert pixel(10, 10).lightness() < normal_fill.lightness()
+    QTest.mouseRelease(tile, Qt.MouseButton.LeftButton)
+    assert not tile._pressed
+    tile.set_playing(True)
+    assert "6px dashed" in tile.styleSheet()
+    leave_tile()
+    assert pixel(tile.width() / 2, 1) == QColor(QColor("#2468ac").lighter(145).name())
+    # The double border has a visible gap, independently of its color.
+    assert pixel(tile.width() / 2, 2) != pixel(tile.width() / 2, 1)
+    tile.set_playing(False)
+    assert pixel(tile.width() / 2, 1) == normal
+    assert tile.jingle_color == "#2468ac"
 
 
 def test_relative_image_path_uses_settings_directory_not_cwd(context, monkeypatch):

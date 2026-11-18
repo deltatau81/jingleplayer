@@ -22,6 +22,16 @@ Auswahl speichert sofort; Abbruch oder ungültige neue Dateien behalten den alte
 Stand. Duplizieren kopiert den Pfad, nicht das Bild. Löschen eines Presets löscht
 keine externen Bilder. Neue Presets beginnen ohne Hintergrund.
 
+Die Darstellung verwendet einen proportionalen, mittigen Cover-Zuschnitt anhand
+der aktuellen Kachelfläche. Resize verwendet das geladene Bild weiter. Kacheln
+haben unabhängig von der gespeicherten Farbe dieselbe neutrale Innenfläche mit
+etwa 35 % Deckkraft. Die gespeicherte Farbe bestimmt nur den deckenden, 3 Pixel
+breiten Rahmen; Farbwerte werden nicht geändert. Transparente Zeilen-Widgets
+lassen das Hintergrundbild durchscheinen. Texte sind weiß mit dunklem Schatten.
+Hover verbreitert und erhellt den Rahmen, Fokus zeigt ihn gestrichelt, Drücken
+dunkelt die Fläche ab. Wiedergabe zeigt einen breiten Doppelrahmen, bei Fokus
+einen breiten gestrichelten Rahmen.
+
 Das optionale Stringfeld `background_image` liegt direkt im Preseteintrag.
 Abwesend oder `""` bedeutet deaktiviert. Bestehende Schema-3-Dokumente ohne Feld
 bleiben gültig und werden nicht durch eine Default-Ergänzung umgeschrieben;
