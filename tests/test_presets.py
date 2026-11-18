@@ -298,3 +298,234 @@ assert not any(name.startswith(('PySide6', 'pygame', 'jingleplayer_logic', 'jing
     child = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, env=environment,
                            capture_output=True, text=True, timeout=30)
     assert child.returncode == 0, child.stderr
+
+
+@pytest.mark.parametrize("activate", [False, True])
+def test_create_defaults_match_existing_board_without_changing_globals(activate):
+    import jingleplayer_logic as logic
+
+    source = schema3()
+    original = deepcopy(source)
+    result = presets.create_preset(source, "Neues 音楽", activate=activate)
+    new = result["presets"][-1]
+    expected = logic._default_settings()
+    assert UUID(new["id"]).version == 4
+    assert new["id"] != source["presets"][0]["id"]
+    for key in ("buttons", "fadeout_duration", "button_height"):
+        assert new[key] == expected[key]
+    assert len(new["buttons"]["paths"]) == 50 and new["buttons"]["paths"] == [""] * 50
+    assert new["buttons"]["per_row"] == [10] * 5
+    assert result["active_preset_id"] == (new["id"] if activate else source["active_preset_id"])
+    assert source == original
+    for key in ("window_size", "volume", "last_folder"):
+        assert result[key] == source[key]
+    result["presets"][0]["buttons"]["paths"][49] = "changed"
+    result["window_size"][0] = 1
+    assert source == original
+
+
+@pytest.mark.parametrize("activate", [False, True])
+def test_duplicate_copies_all_hidden_slot_data_and_preserves_paths(activate):
+    source = two_presets()
+    source["presets"][1]["buttons"]["paths"][49] = r"C:\Audio\Grüße.wav"
+    source["presets"][1]["button_height"] = 7
+    source["presets"][1]["fadeout_duration"] = 31
+    original = deepcopy(source)
+    result = presets.duplicate_preset(source, source["presets"][1]["id"].upper(), "Duplikat", activate=activate)
+    copied = result["presets"][-1]
+    assert UUID(copied["id"]).version == 4
+    assert copied["id"] not in {p["id"] for p in source["presets"]}
+    assert copied["name"] == "Duplikat"
+    for key in ("buttons", "fadeout_duration", "button_height"):
+        assert copied[key] == source["presets"][1][key]
+    assert copied["buttons"]["paths"][49] == r"C:\Audio\Grüße.wav"
+    assert copied["buttons"]["per_row"] == [2, 0, 0, 0, 0]
+    assert result["active_preset_id"] == (copied["id"] if activate else source["active_preset_id"])
+    for key in ("texts", "colors", "paths", "volumes", "per_row"):
+        assert copied["buttons"][key] is not result["presets"][1]["buttons"][key]
+        copied["buttons"][key][0] = None
+        assert result["presets"][1]["buttons"][key] == source["presets"][1]["buttons"][key]
+    assert source == original
+
+
+@pytest.mark.parametrize("name", ["Umbenannt 音楽", "Standard", "STANDARD"])
+def test_rename_changes_only_name_and_preserves_identity_selection_and_order(name):
+    source = two_presets()
+    original = deepcopy(source)
+    result = presets.rename_preset(source, source["presets"][0]["id"].upper(), name)
+    expected = deepcopy(source)
+    expected["presets"][0]["name"] = name
+    assert result == expected and source == original
+    result["presets"][1]["buttons"]["volumes"][49] = 0
+    assert source == original
+
+
+@pytest.mark.parametrize("operation", ["create", "duplicate", "rename"])
+@pytest.mark.parametrize("existing,new", [("Training", "TRAINING"), ("é", "e\u0301"), ("Straße", "STRASSE")])
+def test_management_rejects_name_collisions_without_partial_changes(operation, existing, new):
+    source = two_presets()
+    source["presets"][1]["name"] = existing
+    original = deepcopy(source)
+    with pytest.raises(presets.PresetValidationError) as caught:
+        if operation == "create":
+            presets.create_preset(source, new)
+        elif operation == "duplicate":
+            presets.duplicate_preset(source, source["presets"][0]["id"], new)
+        else:
+            presets.rename_preset(source, source["presets"][0]["id"], new)
+    assert caught.value.code == "duplicate_name" and caught.value.location == "preset.name"
+    assert source == original
+
+
+@pytest.mark.parametrize("operation", ["create", "duplicate", "rename"])
+@pytest.mark.parametrize("name", ["", " leading", "bad\nname", None])
+def test_management_rejects_invalid_names(operation, name):
+    source = two_presets()
+    original = deepcopy(source)
+    identity = source["presets"][0]["id"]
+    with pytest.raises(presets.PresetValidationError):
+        if operation == "create":
+            presets.create_preset(source, name)
+        elif operation == "duplicate":
+            presets.duplicate_preset(source, identity, name)
+        else:
+            presets.rename_preset(source, identity, name)
+    assert source == original
+
+
+@pytest.mark.parametrize("operation", ["duplicate", "rename", "delete"])
+@pytest.mark.parametrize("identity", [None, "bad", str(uuid4())])
+def test_management_rejects_invalid_or_unknown_target_ids(operation, identity):
+    source = two_presets()
+    original = deepcopy(source)
+    with pytest.raises(presets.PresetValidationError) as caught:
+        if operation == "duplicate":
+            presets.duplicate_preset(source, identity, "New")
+        elif operation == "rename":
+            presets.rename_preset(source, identity, "New")
+        else:
+            presets.delete_preset(source, identity)
+    assert caught.value.location == "preset.id"
+    if identity not in (None, "bad"):
+        assert caught.value.code == "unknown_id"
+    assert source == original
+
+
+def test_delete_inactive_keeps_active_id_and_returns_deep_copy():
+    source = two_presets()
+    source["active_preset_id"] = source["active_preset_id"].upper()
+    original = deepcopy(source)
+    result = presets.delete_preset(source, source["presets"][1]["id"])
+    assert result["presets"] == [source["presets"][0]]
+    assert result["active_preset_id"] == source["active_preset_id"]
+    result["presets"][0]["buttons"]["paths"][49] = "detached"
+    assert source == original
+
+
+def test_delete_active_selects_explicit_successor_without_changing_remaining_fields():
+    source = two_presets()
+    original = deepcopy(source)
+    result = presets.delete_preset(source, source["active_preset_id"], successor_id=source["presets"][1]["id"].upper())
+    assert result["active_preset_id"] == source["presets"][1]["id"]
+    assert result["presets"] == [source["presets"][1]]
+    for key in ("window_size", "volume", "last_folder"):
+        assert result[key] == source[key]
+    assert source == original
+    assert presets.validate_schema3_settings(result) == result
+
+
+@pytest.mark.parametrize("successor", [None, "self", "bad", "unknown"])
+def test_delete_active_requires_valid_other_successor(successor):
+    source = two_presets()
+    original = deepcopy(source)
+    chosen = {None: None, "self": source["active_preset_id"].upper(), "bad": "bad", "unknown": str(uuid4())}[successor]
+    with pytest.raises(presets.PresetValidationError) as caught:
+        presets.delete_preset(source, source["active_preset_id"], successor_id=chosen)
+    assert caught.value.location == "successor_id"
+    assert source == original
+
+
+def test_delete_last_preset_is_always_rejected():
+    source = schema3()
+    original = deepcopy(source)
+    with pytest.raises(presets.PresetValidationError) as caught:
+        presets.delete_preset(source, source["active_preset_id"], successor_id=source["active_preset_id"])
+    assert caught.value.code == "last_preset" and caught.value.location == "presets"
+    assert source == original
+
+
+def test_inactive_delete_validates_optional_successor_without_switching():
+    source = two_presets()
+    result = presets.delete_preset(source, source["presets"][1]["id"], successor_id=source["active_preset_id"])
+    assert result["active_preset_id"] == source["active_preset_id"]
+    with pytest.raises(presets.PresetValidationError):
+        presets.delete_preset(source, source["presets"][1]["id"], successor_id=str(uuid4()))
+
+
+@pytest.mark.parametrize("operation", ["create", "duplicate"])
+def test_uuid_collision_retried_and_result_unique(operation, monkeypatch):
+    source = schema3()
+    fresh = uuid4()
+    identities = iter([UUID(source["active_preset_id"]), fresh])
+    monkeypatch.setattr(presets, "uuid4", lambda: next(identities))
+    result = (presets.create_preset(source, "New") if operation == "create" else
+              presets.duplicate_preset(source, source["active_preset_id"], "New"))
+    assert result["presets"][-1]["id"] == str(fresh)
+    assert len({UUID(p["id"]) for p in result["presets"]}) == 2
+
+
+def test_persistent_uuid_collision_fails_without_mutation(monkeypatch):
+    source = schema3()
+    original = deepcopy(source)
+    monkeypatch.setattr(presets, "uuid4", lambda: UUID(source["active_preset_id"]))
+    with pytest.raises(presets.PresetValidationError) as caught:
+        presets.create_preset(source, "New")
+    assert caught.value.code == "id_generation" and source == original
+
+
+@pytest.mark.parametrize("operation", ["create", "duplicate"])
+def test_activate_flag_must_be_boolean(operation):
+    source = schema3()
+    with pytest.raises(presets.PresetValidationError) as caught:
+        if operation == "create":
+            presets.create_preset(source, "New", activate=1)
+        else:
+            presets.duplicate_preset(source, source["active_preset_id"], "New", activate="yes")
+    assert caught.value.location == "activate"
+
+
+@pytest.mark.parametrize("operation", ["create", "duplicate", "rename", "delete"])
+def test_management_validates_entire_input_before_any_changes(operation):
+    source = two_presets()
+    source["presets"][1]["buttons"]["paths"].pop()
+    original = deepcopy(source)
+    with pytest.raises(presets.PresetValidationError):
+        if operation == "create":
+            presets.create_preset(source, "New")
+        elif operation == "duplicate":
+            presets.duplicate_preset(source, source["active_preset_id"], "New")
+        elif operation == "rename":
+            presets.rename_preset(source, source["active_preset_id"], "New")
+        else:
+            presets.delete_preset(source, source["presets"][1]["id"])
+    assert source == original
+
+
+def test_management_never_opens_files_or_deletes_audio(monkeypatch):
+    import builtins
+
+    source = schema3()
+    source["presets"][0]["buttons"]["paths"][49] = r"C:\never-touch\audio.wav"
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("management must not access files")
+
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(Path, "open", forbidden)
+    monkeypatch.setattr(Path, "unlink", forbidden)
+    monkeypatch.setattr(Path, "rmdir", forbidden)
+    created = presets.create_preset(source, "New")
+    copied = presets.duplicate_preset(created, source["active_preset_id"], "Copy", activate=True)
+    renamed = presets.rename_preset(copied, copied["active_preset_id"], "Renamed")
+    result = presets.delete_preset(renamed, renamed["active_preset_id"], successor_id=source["active_preset_id"])
+    assert result == created

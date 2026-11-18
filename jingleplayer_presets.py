@@ -30,12 +30,20 @@ version 3. Explicit null/boolean/negative versions are not guessed to be legacy.
 Migration UUIDv5 uses a fixed namespace and canonical source JSON, independent of
 mapping order and filesystem paths. Existing schema-3 IDs are never regenerated.
 Nothing here changes CURRENT_SCHEMA_VERSION in the running application.
+
+Management operations validate input first and return a detached validated schema-3
+document. They never save or activate runtime state. Create/duplicate append at the
+end and optionally change only the document's active_preset_id. Rename preserves
+ID/order/selection. Delete protects the last preset and requires an explicit other
+successor for the active preset. A supplied successor is always validated, even
+for inactive deletion, but never changes selection in that case. Audio paths are
+data only; duplication/deletion performs no file operations.
 """
 
 from copy import deepcopy
 import json
 import unicodedata
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 
 PRESET_SCHEMA_VERSION = 3
@@ -224,3 +232,103 @@ def extract_active_board(data):
     preset = next(p for p in snapshot["presets"] if UUID(p["id"]) == active)
     return {"schema_version": 2, **{key: snapshot[key] for key in _GLOBALS},
             **{key: preset[key] for key in _BOARD}}
+
+
+def _preset_index(data, preset_id, *, location="preset.id"):
+    try:
+        identity = UUID(validate_preset_id(preset_id))
+    except PresetValidationError as error:
+        raise PresetValidationError(error.code, location, str(error)) from error
+    for index, preset in enumerate(data["presets"]):
+        if UUID(preset["id"]) == identity:
+            return index
+    raise PresetValidationError("unknown_id", location, "preset does not exist")
+
+
+def _available_name(data, name, *, exclude_index=None):
+    key = _name_key(validate_preset_name(name))
+    _require(not any(index != exclude_index and _name_key(preset["name"]) == key
+                     for index, preset in enumerate(data["presets"])),
+             "duplicate_name", "preset.name", "duplicate preset name")
+    return name
+
+
+def _fresh_preset_id(data):
+    used = {UUID(preset["id"]) for preset in data["presets"]}
+    # Collision retry is bounded so faulty randomness cannot cause an endless loop.
+    for _ in range(32):
+        try:
+            identity = uuid4()
+        except OSError as error:
+            raise PresetValidationError("id_generation", "preset.id", "UUID generation failed") from error
+        if identity not in used:
+            return str(identity)
+    raise PresetValidationError("id_generation", "preset.id", "could not generate unique UUID")
+
+
+def create_preset(data, name, *, activate=False):
+    """Append a blank preset with UUIDv4; optionally select it in returned data.
+
+    Defaults match jingleplayer_logic._default_settings without importing it:
+    50 Jingle 1..50 labels, SystemButtonFace, empty paths, 0 dB, five rows of
+    ten buttons, 1000 ms fadeout and button_height=2. Globals remain untouched.
+    activate must be bool. No runtime activation or persistence occurs.
+    """
+    result = validate_schema3_settings(data)
+    _require(type(activate) is bool, "type", "activate", "expected boolean")
+    name = _available_name(result, name)
+    preset = {"id": _fresh_preset_id(result), "name": name,
+              "buttons": {"texts": [f"Jingle {i}" for i in range(1, 51)],
+                          "colors": ["SystemButtonFace"] * 50,
+                          "paths": [""] * 50, "volumes": [0] * 50,
+                          "per_row": [10] * 5},
+              "fadeout_duration": 1000, "button_height": 2}
+    result["presets"].append(preset)
+    if activate:
+        result["active_preset_id"] = preset["id"]
+    return validate_schema3_settings(result)
+
+
+def duplicate_preset(data, preset_id, name, *, activate=False):
+    """Append independent copy of all source fields, with new UUIDv4 and name."""
+    result = validate_schema3_settings(data)
+    _require(type(activate) is bool, "type", "activate", "expected boolean")
+    index = _preset_index(result, preset_id)
+    name = _available_name(result, name)
+    duplicate = deepcopy(result["presets"][index])
+    duplicate.update(id=_fresh_preset_id(result), name=name)
+    result["presets"].append(duplicate)
+    if activate:
+        result["active_preset_id"] = duplicate["id"]
+    return validate_schema3_settings(result)
+
+
+def rename_preset(data, preset_id, name):
+    """Change only the requested display name; no-op/self-case rename is allowed."""
+    result = validate_schema3_settings(data)
+    index = _preset_index(result, preset_id)
+    result["presets"][index]["name"] = _available_name(result, name, exclude_index=index)
+    return validate_schema3_settings(result)
+
+
+def delete_preset(data, preset_id, *, successor_id=None):
+    """Remove one preset in memory; last preset protected, active needs successor.
+
+    Any successor must identify a different existing preset. Inactive deletion
+    preserves the exact active ID string; active deletion selects the successor's
+    stored ID. UUID lookup is case-insensitive, consistently with validation.
+    Never removes source audio, prepared packages, libraries or directories.
+    """
+    result = validate_schema3_settings(data)
+    index = _preset_index(result, preset_id)
+    _require(len(result["presets"]) > 1, "last_preset", "presets", "cannot delete last preset")
+    active = UUID(result["active_preset_id"]) == UUID(result["presets"][index]["id"])
+    _require(not active or successor_id is not None, "successor_required", "successor_id",
+             "deleting active preset requires an explicit successor")
+    if successor_id is not None:
+        successor = _preset_index(result, successor_id, location="successor_id")
+        _require(successor != index, "invalid_successor", "successor_id", "successor must be another preset")
+        if active:
+            result["active_preset_id"] = result["presets"][successor]["id"]
+    del result["presets"][index]
+    return validate_schema3_settings(result)
