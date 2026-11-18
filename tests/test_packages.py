@@ -11,6 +11,7 @@ import sys
 import pytest
 
 import jingleplayer_packages as packages
+import jingleplayer_presets as presets
 
 
 def board():
@@ -1077,8 +1078,7 @@ def activation_fixture(tmp_path):
     prepared = packages.prepare_package_import(package, staging)
     settings_path = tmp_path / "active.json"
     receiver = board()
-    receiver.update(window_size=[1234, 777], volume=37, last_folder=str(tmp_path / "local audio"),
-                    local_extension={"keep": True})
+    receiver.update(window_size=[1234, 777], volume=37, last_folder=str(tmp_path / "local audio"))
     receiver["buttons"]["texts"][0] = "old board"
     receiver["buttons"]["paths"][49] = str(tmp_path / "old.wav")
     settings_path.write_bytes(json.dumps(receiver, indent=4, ensure_ascii=False).encode("utf-8"))
@@ -1089,7 +1089,8 @@ def activation_fixture(tmp_path):
 
 
 def activate(args):
-    return packages.activate_prepared_import(*args)
+    import jingleplayer_logic as logic
+    return packages.activate_prepared_import(*args, legacy_normalizer=logic._normalize_settings_data)
 
 
 def test_activate_end_to_end_preserves_receiver_and_all_slots(tmp_path, monkeypatch):
@@ -1111,9 +1112,9 @@ def test_activate_end_to_end_preserves_receiver_and_all_slots(tmp_path, monkeypa
     assert result.recovery_directory.parent == recoveries
     current = json.loads(settings_path.read_bytes())
     assert current == result.settings
+    current = presets.extract_active_board(current)
     assert current["window_size"] == [1234, 777] and current["volume"] == 37
     assert current["last_folder"] == str(tmp_path / "local audio")
-    assert current["local_extension"] == {"keep": True}
     assert len(current["buttons"]["paths"]) == 50
     assert current["buttons"]["paths"][0] == current["buttons"]["paths"][49]
     for key in ("texts", "colors", "volumes", "per_row"):
@@ -1156,7 +1157,7 @@ def test_activate_fifty_distinct_assets_including_hidden_slots(tmp_path):
     packages.export_package_directory(settings, package)
     args[0] = packages.prepare_package_import(package, tmp_path / "staging")
     result = activate(args)
-    assert len(set(result.settings["buttons"]["paths"])) == 50
+    assert len(set(presets.extract_active_board(result.settings)["buttons"]["paths"])) == 50
     assert len(packages.validate_package_directory(result.installed_directory).assets) == 50
 
 
@@ -1226,7 +1227,7 @@ def test_activate_ignores_mutable_mapped_paths_and_settings(tmp_path):
     args[0].settings["buttons"]["paths"][0] = "unsafe mapping"
     args[0].audio_paths.clear()
     result = activate(args)
-    assert result.settings["buttons"]["paths"][0].startswith(str(result.installed_directory))
+    assert presets.extract_active_board(result.settings)["buttons"]["paths"][0].startswith(str(result.installed_directory))
 
 
 @pytest.mark.parametrize("raw", [b"{", b"[]", b'{"schema_version":99}', b'{"buttons":[]}',
@@ -1249,11 +1250,11 @@ def test_activate_legacy_receiver_backup_and_defaults(tmp_path, version):
     original = json.dumps(old).encode()
     args[1].write_bytes(original)
     result = activate(args)
-    backup = args[1].with_name("jingleplayer_settings.pre-pyside6.json")
+    backup = next(args[1].parent.glob("*.pre-presets.*.json"))
     assert backup.read_bytes() == original
-    assert result.settings["schema_version"] == 2
+    assert result.settings["schema_version"] == 3
     assert result.settings["window_size"] == [800, 600] and result.settings["volume"] == 100
-    assert "last_folder" not in result.settings
+    assert isinstance(result.settings["last_folder"], str)
     assert (result.recovery_directory / packages.SETTINGS_NAME).read_bytes() == original
 
 
@@ -1261,7 +1262,7 @@ def test_activate_conflicting_legacy_backup_blocks_commit(tmp_path):
     args = activation_fixture(tmp_path)
     original = b'{"schema_version":1}'
     args[1].write_bytes(original)
-    backup = args[1].with_name("jingleplayer_settings.pre-pyside6.json")
+    backup = args[1].with_name(args[1].name + ".pre-presets." + hashlib.sha256(original).hexdigest() + ".json")
     backup.write_bytes(b"existing backup")
     with pytest.raises(packages.ActivationError) as caught:
         activate(args)
@@ -1345,7 +1346,7 @@ print(json.dumps(logic.get_current_settings(), ensure_ascii=True))
                            env=environment, capture_output=True, text=True, timeout=30)
     assert child.returncode == 0, child.stderr
     loaded = json.loads(child.stdout.splitlines()[-1])
-    assert loaded == result.settings
+    assert loaded == presets.extract_active_board(result.settings)
     assert loaded["window_size"] == [1234, 777] and loaded["volume"] == 37
     assert loaded["last_folder"] == str(tmp_path / "local audio")
     assert len(loaded["buttons"]["paths"]) == 50
@@ -1411,7 +1412,7 @@ def test_activate_exception_after_replace_never_restores(tmp_path, monkeypatch, 
     if changed_after:
         assert args[1].read_bytes() == concurrent
     else:
-        assert len(json.loads(args[1].read_bytes())["buttons"]["paths"]) == 50
+        assert len(presets.extract_active_board(json.loads(args[1].read_bytes()))["buttons"]["paths"]) == 50
     assert caught.value.recovery_directory.is_dir()
 
 

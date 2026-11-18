@@ -81,6 +81,7 @@ def audio(monkeypatch):
     logic.playing_channels.clear()
     logic._playbacks_by_event.clear()
     logic._events_by_button.clear()
+    monkeypatch.setattr(logic, "_issued_end_events", set())
     logic._next_end_event = None
     logic.button_volumes = [0] * logic.DEFAULT_BUTTON_COUNT
     logic.set_volume = 100

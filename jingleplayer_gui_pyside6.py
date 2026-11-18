@@ -6,6 +6,7 @@ import os
 import re
 import unicodedata
 from pathlib import Path
+from uuid import UUID
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QIcon
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QDialog,
     QDialogButtonBox,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -375,6 +377,10 @@ class JingleplayerMainWindow(QMainWindow):
         self.buttons_per_row = list(button_settings.get("per_row", []))
         self.button_height = int(current_settings.get("button_height", 2))
         self._build_main_layout(current_settings)
+        menu = self.menuBar().addMenu("Presets")
+        for text, op in (("Neu…", "create"), ("Duplizieren…", "duplicate"), ("Umbenennen…", "rename"), ("Löschen…", "delete")):
+            menu.addAction(text).triggered.connect(lambda checked=False, operation=op: self._manage_preset(operation))
+        self._refresh_preset_selector()
 
         self.sound_end_timer = QTimer(self)
         self.sound_end_timer.setInterval(jingleplayer_logic.FADEOUT_CHECK_INTERVAL_MS)
@@ -386,6 +392,73 @@ class JingleplayerMainWindow(QMainWindow):
         package_menu.addActions([self.export_action, self.import_action])
         self.export_action.triggered.connect(self._export_soundboard)
         self.import_action.triggered.connect(self._import_soundboard)
+
+    def _refresh_preset_selector(self):
+        blocked = self.preset_combo.blockSignals(True)
+        try:
+            self.preset_combo.clear()
+            document = jingleplayer_logic.get_preset_settings()
+            for preset in document["presets"]:
+                self.preset_combo.addItem(preset["name"], preset["id"])
+            self.preset_combo.setCurrentIndex(next(i for i, p in enumerate(document["presets"])
+                                                   if UUID(p["id"]) == UUID(document["active_preset_id"])))
+        finally:
+            self.preset_combo.blockSignals(blocked)
+
+    def _manage_preset(self, operation):
+        if not self._begin_package_operation():
+            return
+        committed = False
+        try:
+            document = jingleplayer_logic.get_preset_settings()
+            active = document["active_preset_id"]
+            selected = next(p for p in document["presets"] if UUID(p["id"]) == UUID(active))
+            kwargs = {}
+            if operation == "switch":
+                target = self.preset_combo.currentData()
+                if target is None or target == active:
+                    return
+                args = (target,)
+            elif operation == "delete":
+                if len(document["presets"]) == 1:
+                    raise ValueError("Das letzte Preset darf nicht gelöscht werden.")
+                if QMessageBox.question(self, "Preset löschen?", f"Preset „{selected['name']}“ löschen? Audiodateien bleiben erhalten.",
+                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                        QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                    return
+                other = [p for p in document["presets"] if p["id"] != active]
+                name, ok = QInputDialog.getItem(self, "Nachfolger", "Aktives Preset danach:", [p["name"] for p in other], 0, False)
+                if not ok:
+                    return
+                args = (active,)
+                kwargs["successor_id"] = next(p["id"] for p in other if p["name"] == name)
+            else:
+                name, ok = QInputDialog.getText(self, "Preset", "Presetname:")
+                if not ok:
+                    return
+                args = (name,) if operation == "create" else (active, name)
+                if operation in ("create", "duplicate"):
+                    kwargs["activate"] = True
+            self.sound_end_timer.stop()
+            result = jingleplayer_logic.manage_presets(operation, *args, **kwargs)
+            if not result["success"]:
+                raise RuntimeError(result["error"])
+            committed = True
+            self._reload_after_import()
+        except Exception as error:
+            if committed or jingleplayer_logic.get_settings_persistence_status()["write_blocked"]:
+                self._settings_writes_blocked = self._restart_required = True
+            QMessageBox.critical(self, "Preset konnte nicht geändert werden",
+                                 ("Änderung gespeichert, aber Anzeige nicht geladen. Bitte neu starten.\n"
+                                  if committed else "") + str(error))
+        finally:
+            self._refresh_preset_selector()
+            playing = set(jingleplayer_logic.get_playing_indices())
+            for index, tile in enumerate(self.jingle_tiles, 1):
+                tile.set_playing(index in playing)
+            if not self._restart_required:
+                self.sound_end_timer.start()
+            self._finish_package_operation()
 
     def _begin_package_operation(self):
         if self._package_busy or self._restart_required:
@@ -626,7 +699,8 @@ class JingleplayerMainWindow(QMainWindow):
             answer = QMessageBox.question(
                 self, "Soundboard importieren?",
                 f"{len(validated.assets)} Audiodateien, {assigned} zugewiesene Tasten (von 50, einschließlich "
-                "ausgeblendeter Tasten).\n\nDie aktuellen Tastenbelegungen werden vollständig ersetzt. "
+                "ausgeblendeter Tasten).\n\nIm nächsten Schritt wählen Sie ein neues Preset oder ausdrücklich "
+                "das Ersetzen des aktiven Presets. Andere Presets bleiben erhalten. "
                 "Lokale Fenstergröße und Gesamtlautstärke bleiben erhalten. "
                 "Vor dem Wechsel wird die Wiedergabe gestoppt und eine Wiederherstellungskopie angelegt.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -636,6 +710,23 @@ class JingleplayerMainWindow(QMainWindow):
                 self._finish_package_operation()
                 return
             settings_path = Path(jingleplayer_logic.settings_file)
+            mode, ok = QInputDialog.getItem(self, "Importziel", "Soundboard übernehmen:",
+                                           ["Als neues Preset", "Aktives Preset ersetzen"], 0, False)
+            if not ok:
+                self._finish_package_operation()
+                return
+            preset_mode = "new" if mode == "Als neues Preset" else "replace"
+            preset_name = None
+            if preset_mode == "new":
+                preset_name, ok = QInputDialog.getText(self, "Importiertes Preset", "Presetname:")
+                if not ok:
+                    self._finish_package_operation()
+                    return
+            saved = jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
+            if not saved["success"]:
+                self._import_failed(RuntimeError(saved["error"]))
+                return
+            expected = jingleplayer_logic.get_settings_storage_token()
 
             def prepare():
                 roots = self._managed_package_roots(settings_path)
@@ -659,6 +750,7 @@ class JingleplayerMainWindow(QMainWindow):
                         jingleplayer_logic.stop_jingle(index, 0)
                     if jingleplayer_logic.get_playing_indices():
                         raise RuntimeError("Audiowiedergabe konnte nicht vollständig gestoppt werden.")
+                    jingleplayer_logic.stop_all_playback()
                     for tile in self.jingle_tiles:
                         tile.set_playing(False)
                 except Exception as stop_error:
@@ -666,7 +758,9 @@ class JingleplayerMainWindow(QMainWindow):
                     return
                 self._settings_writes_blocked = True
                 self._run_package_job("Soundboard wird aktiviert …", lambda:
-                    jingleplayer_packages.activate_prepared_import(prepared, settings_path, roots[1], roots[2]),
+                    jingleplayer_packages.activate_prepared_import(
+                        prepared, settings_path, roots[1], roots[2], preset_mode=preset_mode,
+                        preset_name=preset_name, expected=expected),
                     self._activation_done)
 
             self._run_package_job("Soundboard wird vorbereitet …", prepare, prepared_done)
@@ -768,6 +862,7 @@ class JingleplayerMainWindow(QMainWindow):
         finally:
             self.volume_slider.blockSignals(previous)
         self._rebuild_jingle_layout()
+        self._refresh_preset_selector()
 
     def _build_main_layout(self, current_settings):
         central_widget = QWidget(self)
@@ -778,6 +873,10 @@ class JingleplayerMainWindow(QMainWindow):
         volume_layout = QHBoxLayout()
         volume_layout.setContentsMargins(0, 0, 0, 0)
         volume_layout.setSpacing(8)
+        self.preset_combo = QComboBox(central_widget)
+        self.preset_combo.setAccessibleName("Aktives Preset")
+        self.preset_combo.currentIndexChanged.connect(lambda _: self._manage_preset("switch"))
+        volume_layout.addWidget(self.preset_combo)
 
         volume_label = QLabel("Lautstärke", central_widget)
         volume_layout.addWidget(volume_label)
@@ -950,6 +1049,8 @@ class JingleplayerMainWindow(QMainWindow):
         result = jingleplayer_logic.save_settings(current_settings)
         if result.get("success"):
             return True
+        if jingleplayer_logic.get_settings_persistence_status()["write_blocked"]:
+            self._settings_writes_blocked = self._restart_required = True
         QMessageBox.critical(
             self,
             title,

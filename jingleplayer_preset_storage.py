@@ -1,4 +1,4 @@
-"""Explicit, isolated schema-3 storage. Not wired into application startup.
+"""Explicit schema-3 storage shared by application settings and package activation.
 
 All paths are absolute native paths; their parents must already exist and be free
 of symlinks/reparse points. No home/CWD lookup, audio, GUI or package dependency.
@@ -12,7 +12,7 @@ replace this coordination file: doing so would split the lock domain. Its empty
 contents are not settings or a second source of truth. A crashed process releases
 the OS lock; a leftover lock file is normal. A busy lock raises code 'locked'.
 Cooperating writers serialize read/compare/backup/write/replace. Noncooperating
-writers (including the current schema-2 application) do not honor this lock:
+writers (including older schema-2 application versions) do not honor this lock:
 fingerprints detect observed changes only, not a full compare-and-swap. Ancestors
 must remain trusted/stable; path checks are not a hostile-process sandbox.
 
@@ -258,11 +258,14 @@ def _cleanup_temp(path, identity):
         return path
 
 
-def save_preset_settings(path, data, *, expected):
+def save_preset_settings(path, data, *, expected, before_commit=None):
     """Explicit save -> new LoadedPresetSettings token; never a blind overwrite.
 
     expected must come from a load/save of this path. On failure, old tokens may
     be retried only if the file is unchanged; after success use the returned token.
+    before_commit is an optional trusted integrity callback, run after temporary
+    writing under the lock, immediately before the final fingerprint check/replace.
+    A rejecting callback aborts with temporary cleanup and no settings replacement.
     Validation errors remain PresetValidationError; I/O/conflict/locking errors
     use PresetStorageError, with retained backup/temp paths and commit outcome.
     """
@@ -292,6 +295,8 @@ def save_preset_settings(path, data, *, expected):
             _, staged = _read(temporary)
             if staged != encoded:
                 raise PresetStorageError("write", temporary, "temporary bytes differ")
+            if before_commit is not None:
+                before_commit()
             _check_expected(path, expected)
             attempted = True
             os.replace(temporary, path)
@@ -301,7 +306,7 @@ def save_preset_settings(path, data, *, expected):
             if raw != encoded:
                 raise PresetStorageError("conflict", path, "settings changed after commit", outcome="saved")
             return LoadedPresetSettings(path, validated, fingerprint, raw, 3, backup)
-    except (OSError, PresetStorageError) as error:
+    except (OSError, ValueError) as error:
         outcome = "saved" if committed else "not_saved"
         if attempted and not committed:
             try:

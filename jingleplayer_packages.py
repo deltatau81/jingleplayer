@@ -56,6 +56,8 @@ import sys
 import tempfile
 import unicodedata
 import uuid
+import jingleplayer_presets as presets
+import jingleplayer_preset_storage as preset_storage
 
 PACKAGE_VERSION = 1
 MANIFEST_NAME = "jingleplayer_package.json"
@@ -737,36 +739,6 @@ def prepare_package_import(package_directory, staging_root):
         raise PackageValidationError("preparation", str(package_directory), str(error)) from error
 
 
-def _receiving_settings(path):
-    """Read receiver without application imports; match its structural/version gate.
-
-    Existing board arrays are replaced, not migrated. Missing legacy local fields
-    use the application's 800x600/100 defaults; absent last_folder stays absent
-    (the application supplies its home fallback on next load). Local values that
-    are present must meet the current GUI's safe type/range requirements.
-    """
-    before = _safe_stat(path)
-    raw = _read_file(path, MAX_JSON_BYTES)
-    current = _json_file(path)
-    _require(type(current) is dict, "settings", str(path), "receiver must be an object")
-    _require(current.get("buttons") is None or type(current["buttons"]) is dict,
-             "settings", str(path), "receiver buttons must be an object")
-    version = current.get("schema_version")
-    _require(version is None or (type(version) is int and version <= 2),
-             "settings", str(path), "unsupported receiver schema")
-    size = current.get("window_size", [800, 600])
-    _require(type(size) is list and len(size) == 2, "settings", "window_size", "expected two dimensions")
-    for value in size:
-        _integer(value, 1, None, "window_size")
-    _integer(current.get("volume", 100), 0, 100, "volume")
-    _require("last_folder" not in current or type(current["last_folder"]) is str,
-             "settings", "last_folder", "receiver last_folder must be a string")
-    _require(_identity(_safe_stat(path)) == _identity(before) and
-             _read_file(path, MAX_JSON_BYTES) == raw,
-             "conflict", str(path), "receiver changed while reading")
-    return raw, current, before
-
-
 def _write_recovery_bytes(path, value):
     with path.open("xb") as stream:
         stream.write(value)
@@ -776,25 +748,8 @@ def _write_recovery_bytes(path, value):
              "recovery", str(path), "written snapshot verification failed")
 
 
-def _ensure_activation_migration_backup(settings_path, original):
-    backup = settings_path.with_name("jingleplayer_settings.pre-pyside6.json")
-    if not os.path.lexists(backup):
-        try:
-            _write_recovery_bytes(backup, original)
-        except FileExistsError:
-            pass  # Another writer won; compare rather than replace.
-    _require(_read_file(backup, MAX_JSON_BYTES) == original,
-             "backup", str(backup), "existing migration backup differs; activation blocked")
-
-
-def _check_settings_fingerprint(path, original, info):
-    _check_directory_chain(path.parent)
-    _require(_identity(_safe_stat(path)) == _identity(info) and
-             _read_file(path, MAX_JSON_BYTES) == original,
-             "conflict", str(path), "active settings changed during activation")
-
-
-def activate_prepared_import(prepared, settings_path, library_root, recovery_root):
+def activate_prepared_import(prepared, settings_path, library_root, recovery_root, *,
+                             preset_mode="replace", preset_name=None, expected=None, legacy_normalizer=None):
     """Install and commit a prepared board on disk; return ActivationResult.
 
     All paths must be explicit absolute native paths without traversal or links.
@@ -810,8 +765,9 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
     Each attempt uses new names; recovery is never deleted, including partial
     recovery on failure. It is independently usable by verifying size/hash and
     explicitly restoring its JSON; no automatic restore is implemented here.
-    Legacy (<2 or absent version) receivers additionally require the existing
-    pre-pyside6 byte-for-byte backup rule, without overwriting that backup.
+    Schema-2/legacy receivers migrate in memory (legacy needs explicit normalizer).
+    Schema-3 commit creates an independent pre-preset backup via preset_storage;
+    existing pre-pyside6 backups are never modified.
 
     Assets are prepared anew beneath library_root, then published using the
     existing no-replace atomic directory rename into import-<uuid>. Installed
@@ -822,12 +778,14 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
 
     Before commit: validate installed data, verify recovery and fingerprint the
     active settings immediately before same-directory os.replace of a flushed,
-    fsynced UTF-8 schema-2 JSON temporary file. Receiver window_size, volume,
-    last_folder and unknown top-level extensions are retained; imported board
-    fields replace the old board entirely; obsolete background_image is removed.
-    Unknown old button extensions are discarded with the replaced board.
+    fsynced UTF-8 schema-3 JSON temporary file under the shared storage OS lock.
+    Receiver window_size, volume and last_folder and other presets are retained.
+    preset_mode='new' adds/selects a uniquely named preset; 'replace' replaces only
+    the active board, retaining its ID/name. Unknown receiver fields fail closed.
+    expected optionally pins the caller's previously loaded settings fingerprint.
 
-    No shared lock exists in the application writer. Fingerprints detect observed
+    All current application writers share preset_storage's lock. Older builds or
+    external editors do not honor that lock. Fingerprints detect observed
     changes/replacements but cannot close the check-to-replace race or detect an
     edit restored to identical bytes/identity. Ancestors must be stable/trusted,
     as for preparation. Revalidation cannot identify a byte-identical replacement
@@ -873,24 +831,27 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
         _require(validated == prepared.source_package, "integrity", str(package),
                  "prepared package differs from recorded source snapshot")
         # Never trust caller-mutable mapped settings or audio_paths for installation.
-        original, receiver, receiver_info = _receiving_settings(settings_path)
+        _require(preset_mode in ("new", "replace"), "mode", "preset_mode", "expected new or replace")
+        receiver_token = expected or preset_storage.load_preset_settings(settings_path, legacy_normalizer=legacy_normalizer)
+        _require(receiver_token.path == settings_path and receiver_token.original_bytes is not None,
+                 "settings", str(settings_path), "existing receiver/token required")
+        original = receiver_token.original_bytes
+        receiver = deepcopy(receiver_token.data)
         operation = "import-" + uuid.uuid4().hex
         installed = library / operation
         recovery = recoveries / operation
         next_settings = deepcopy(receiver)
-        next_settings.update(deepcopy(validated.settings))
-        next_settings["window_size"] = deepcopy(receiver.get("window_size", [800, 600]))
-        next_settings["volume"] = receiver.get("volume", 100)
-        if "last_folder" in receiver:
-            next_settings["last_folder"] = receiver["last_folder"]
-        else:
-            next_settings.pop("last_folder", None)
-        next_settings.pop("background_image", None)
-        next_settings["buttons"]["paths"] = [
+        if preset_mode == "new":
+            next_settings = presets.create_preset(next_settings, preset_name, activate=True)
+        active = next(p for p in next_settings["presets"]
+                      if uuid.UUID(p["id"]) == uuid.UUID(next_settings["active_preset_id"]))
+        for key in ("buttons", "fadeout_duration", "button_height"):
+            active[key] = deepcopy(validated.settings[key])
+        active["buttons"]["paths"] = [
             str(installed.joinpath(*p.split("/"))) if p else ""
             for p in validated.settings["buttons"]["paths"]]
+        next_settings = presets.validate_schema3_settings(next_settings)
         encoded = json.dumps(next_settings, indent=4, ensure_ascii=False, allow_nan=False).encode("utf-8")
-        _require(len(encoded) <= MAX_JSON_BYTES, "limit", "active settings", "settings byte limit exceeded")
         old_digest, new_digest = hashlib.sha256(original).hexdigest(), hashlib.sha256(encoded).hexdigest()
         metadata = {"recovery_version": 1, "settings_path": str(settings_path),
                     "settings_size": len(original), "settings_sha256": old_digest,
@@ -918,36 +879,37 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
         installed_owner = _directory_identity(installed)
         _require(validate_package_directory(installed) == validated,
                  "integrity", str(installed), "installed package verification failed")
-        if receiver.get("schema_version") is None or receiver["schema_version"] < 2:
-            _check_settings_fingerprint(settings_path, original, receiver_info)
-            _ensure_activation_migration_backup(settings_path, original)
-        _check_directory_chain(settings_path.parent)
-        with tempfile.NamedTemporaryFile(mode="wb", dir=settings_path.parent,
-                                         prefix=f".{settings_path.name}.import-", suffix=".tmp",
-                                         delete=False) as stream:
-            temporary = Path(stream.name)
-            retained.append(temporary)
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
-        _require(_read_file(temporary, MAX_JSON_BYTES) == encoded,
-                 "integrity", str(temporary), "settings temporary file verification failed")
         _check_preparation_owner(recovery, recovery_owner)
-        _require(_read_file(snapshot_path, MAX_JSON_BYTES) == original and
+        _require(_read_file(snapshot_path, preset_storage.MAX_SETTINGS_BYTES) == original and
                  _json_file(recovery / "recovery.json") == metadata,
                  "recovery", str(recovery), "recovery changed before commit")
         _check_preparation_owner(installed, installed_owner)
         _require(validate_package_directory(installed) == validated,
                  "integrity", str(installed), "installed files changed before commit")
         result = ActivationResult(settings_path, installed, recovery, old_digest, new_digest, next_settings)
-        _check_settings_fingerprint(settings_path, original, receiver_info)
         attempted = True
-        os.replace(temporary, settings_path)
+        def verify_before_commit():
+            _check_preparation_owner(recovery, recovery_owner)
+            _require(_read_file(snapshot_path, preset_storage.MAX_SETTINGS_BYTES) == original and
+                     _json_file(recovery / "recovery.json") == metadata,
+                     "recovery", str(recovery), "recovery changed before commit")
+            _check_preparation_owner(installed, installed_owner)
+            _require(validate_package_directory(installed) == validated,
+                     "integrity", str(installed), "installed files changed before commit")
+
+        preset_storage.save_preset_settings(settings_path, next_settings, expected=receiver_token,
+                                            before_commit=verify_before_commit)
         committed = True
         return result
     except (OSError, TypeError, ValueError, RecursionError) as error:
         outcome = "committed" if committed else "not_committed"
-        if attempted and not committed:
+        if isinstance(error, preset_storage.PresetStorageError):
+            outcome = {"saved": "committed", "not_saved": "not_committed"}.get(error.outcome, "indeterminate")
+            if error.temporary_path:
+                retained.append(error.temporary_path)
+            if error.backup_path:
+                retained.append(error.backup_path)
+        elif attempted and not committed:
             try:
                 observed = _read_file(settings_path, MAX_JSON_BYTES)
                 outcome = "committed" if observed == encoded else (

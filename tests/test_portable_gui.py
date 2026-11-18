@@ -35,7 +35,7 @@ def context(tmp_path, monkeypatch):
     names = ("settings", "button_texts", "button_colors", "jingle_paths", "button_volumes",
              "buttons_per_row", "fadeout_duration", "button_height", "set_volume",
              "_loaded_settings_path", "_settings_snapshot", "_original_settings_bytes",
-             "_backup_required", "_write_blocked_error", "_source_exists")
+             "_backup_required", "_write_blocked_error", "_source_exists", "_preset_token")
     for name in names:
         monkeypatch.setattr(logic, name, deepcopy(getattr(logic, name)))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "fake-home"))
@@ -55,6 +55,7 @@ def context(tmp_path, monkeypatch):
         return {"indicator_update": {"index": index, "playing": False}}
 
     monkeypatch.setattr(logic, "stop_jingle", stop)
+    monkeypatch.setattr(logic, "stop_all_playback", lambda: None)
     messages, questions = [], []
     for kind in ("critical", "information", "warning"):
         monkeypatch.setattr(QMessageBox, kind, lambda parent, title, text, k=kind:
@@ -68,6 +69,7 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a, **k: "")
     monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
     monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a, **k: ("", False))
+    monkeypatch.setattr(gui.QInputDialog, "getItem", lambda *a, **k: ("Aktives Preset ersetzen", True))
     window = gui.create_main_window()
     value = SimpleNamespace(app=app, window=window, active=active, initial=initial,
                             messages=messages, questions=questions, playing=playing, stops=stops)
@@ -238,9 +240,9 @@ def test_real_import_reload_close_and_hidden_slots(context, tmp_path, monkeypatc
     activate = packages.activate_prepared_import
     calls = []
 
-    def once(*args):
+    def once(*args, **kwargs):
         calls.append(args)
-        return activate(*args)
+        return activate(*args, **kwargs)
 
     monkeypatch.setattr(packages, "activate_prepared_import", once)
     context.playing.extend([1, 50])
@@ -264,7 +266,7 @@ def test_real_import_reload_close_and_hidden_slots(context, tmp_path, monkeypatc
     # Force the existing close-save path to prove it uses imported runtime data.
     window.resize(window.width() + 10, window.height() + 10)
     window.close()
-    disk = json.loads(context.active.read_bytes())
+    disk = packages.presets.extract_active_board(json.loads(context.active.read_bytes()))
     assert disk["buttons"]["texts"][49] == "Hidden Unicode 音楽"
     assert Path(disk["buttons"]["paths"][49]).is_relative_to(context.active.parent / "library")
     assert disk["volume"] == 42
@@ -279,10 +281,10 @@ def test_activation_outcomes_and_stale_save_protection(context, tmp_path, monkey
     select_import(monkeypatch, package)
     real_activate = packages.activate_prepared_import
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         recovery = tmp_path / "recovery-report"
         if outcome == "committed":
-            real_activate(*args)
+            real_activate(*args, **kwargs)
         raise packages.ActivationError("injected", outcome=outcome, recovery_directory=recovery,
                                        installed_directory=None, retained_paths=[recovery])
 
@@ -320,7 +322,7 @@ def test_committed_reload_failure_locks_saves_and_close(context, tmp_path, monke
     monkeypatch.setattr(gui.jingleplayer_logic, "save_settings", lambda *a: pytest.fail("stale save"))
     context.window.resize(1200, 700)
     context.window.close()
-    assert json.loads(context.active.read_bytes())["buttons"]["texts"][0] == "Imported"
+    assert packages.presets.extract_active_board(json.loads(context.active.read_bytes()))["buttons"]["texts"][0] == "Imported"
 
 
 def test_busy_guards_reentrant_mutation_and_close(context, monkeypatch):
@@ -332,6 +334,7 @@ def test_busy_guards_reentrant_mutation_and_close(context, monkeypatch):
     window._import_soundboard()
     window._export_soundboard()
     window._open_settings_dialog()
+    window._manage_preset("create")
     window._open_jingle_editor(1)
     window._handle_volume_change(7)
     window._save_application_settings(7, [10] * 5, 3)

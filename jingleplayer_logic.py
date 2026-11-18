@@ -9,6 +9,9 @@ except Exception as _e:
 import os
 import json
 import tempfile
+from uuid import UUID
+import jingleplayer_presets as presets
+import jingleplayer_preset_storage as preset_storage
 from copy import deepcopy
 from pathlib import Path
 
@@ -29,7 +32,7 @@ MIXER_SIZE = -16
 MIXER_OUTPUT_CHANNELS = 2
 MIXER_BUFFER = 512
 MIXER_CHANNEL_COUNT = DEFAULT_BUTTON_COUNT
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 PRE_PYSIDE6_BACKUP_NAME = "jingleplayer_settings.pre-pyside6.json"
 
 # Variable, um den aktuellen Status des Players zu speichern
@@ -40,6 +43,7 @@ playing_channels = {}  # Map button index -> pygame Channel (für Laufzeit-Volum
 _playbacks_by_event = {}  # Map endevent id -> (button index, exact Channel)
 _events_by_button = {}  # Map button index -> endevent id
 _next_end_event = None
+_issued_end_events = set()
 button_texts = []
 button_colors = []
 jingle_paths = []
@@ -117,8 +121,9 @@ def _normalize_buttons_per_row(per_row):
 
 
 def _default_settings():
+    """Schema-2 board defaults used as migration/initialization input, not storage."""
     return {
-        "schema_version": CURRENT_SCHEMA_VERSION,
+        "schema_version": 2,
         "buttons": {
             "texts": _default_button_texts(),
             "colors": ["SystemButtonFace"] * DEFAULT_BUTTON_COUNT,
@@ -168,7 +173,7 @@ def _normalize_settings_data(raw_settings):
     buttons["paths"] = _normalize_button_slots(buttons.get("paths"), [""] * DEFAULT_BUTTON_COUNT)
     buttons["volumes"] = _normalize_button_slots(buttons.get("volumes"), [0] * DEFAULT_BUTTON_COUNT)
     normalized["buttons"] = buttons
-    normalized["schema_version"] = CURRENT_SCHEMA_VERSION
+    normalized["schema_version"] = 2
     return normalized
 
 
@@ -187,142 +192,95 @@ def _save_result(success, skipped=False, error=None):
     return {"success": bool(success), "skipped": bool(skipped), "error": error}
 
 
-def _backup_path():
-    return settings_file.with_name(PRE_PYSIDE6_BACKUP_NAME)
-
-
-def _ensure_migration_backup():
-    backup_path = _backup_path()
-    original_bytes = _original_settings_bytes
-    backup_created = False
-    if original_bytes is None:
-        return "Die Originaldaten der Settingsdatei sind nicht für ein Backup verfügbar."
-    try:
-        if backup_path.exists():
-            if backup_path.read_bytes() != original_bytes:
-                return f"Das vorhandene Migrationsbackup {backup_path} gehört zu einer anderen Settingsdatei."
-            return None
-        try:
-            with open(backup_path, "xb") as backup_file:
-                backup_created = True
-                backup_file.write(original_bytes)
-                backup_file.flush()
-                os.fsync(backup_file.fileno())
-        except FileExistsError:
-            if backup_path.read_bytes() != original_bytes:
-                return f"Das vorhandene Migrationsbackup {backup_path} gehört zu einer anderen Settingsdatei."
-        return None
-    except OSError as error:
-        if backup_created:
-            try:
-                backup_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        return f"Das Migrationsbackup konnte nicht erstellt oder geprüft werden: {error}"
+_preset_token = None
 
 
 def _inspect_unloaded_settings_path():
-    """Establish safe persistence metadata when save is called without a prior load."""
-    try:
-        if not settings_file.exists():
-            _set_persistence_state(settings_file, None, None, False, None, False)
-            return
-        original_bytes = settings_file.read_bytes()
-        raw_settings = json.loads(original_bytes.decode("utf-8"))
-        version = _validate_settings_data(raw_settings)
-        _normalize_settings_data(raw_settings)
-        _set_persistence_state(
-            settings_file,
-            None,
-            original_bytes,
-            version is None or version < CURRENT_SCHEMA_VERSION,
-            None,
-            True,
-        )
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
-        _set_persistence_state(
-            settings_file, None, None, False, f"Die Settingsdatei konnte nicht sicher gelesen werden: {error}", True
-        )
+    load_settings()
 
-# Einstellungen laden
+
 def load_settings():
-    default_settings = _default_settings()
+    """Load one schema-3 document; migration remains in RAM until a real save."""
+    global _preset_token
+    defaults = _default_settings()
     try:
-        if not settings_file.exists():
-            _set_persistence_state(settings_file, default_settings, None, False, None, False)
-            return default_settings
-        original_bytes = settings_file.read_bytes()
-        raw_settings = json.loads(original_bytes.decode("utf-8"))
-        version = _validate_settings_data(raw_settings)
-        normalized = _normalize_settings_data(raw_settings)
-        _set_persistence_state(
-            settings_file,
-            normalized,
-            original_bytes,
-            version is None or version < CURRENT_SCHEMA_VERSION,
-            None,
-            True,
-        )
-        return normalized
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
-        message = f"Die Settingsdatei konnte nicht sicher gelesen werden: {error}"
-        _set_persistence_state(settings_file, default_settings, None, False, message, True)
-        print(message)
-        return default_settings
+        if not settings_file.parent.exists():
+            # New installation: no directory is created by loading.
+            document = presets.migrate_settings_to_schema3(defaults)
+            _preset_token = None
+            _set_persistence_state(settings_file, document, None, False, None, False)
+            return document
+        _preset_token = preset_storage.load_preset_settings(
+            settings_file, initialize=True, initial_settings=defaults,
+            legacy_normalizer=_normalize_settings_data)
+        document = _preset_token.data
+        _set_persistence_state(settings_file, document, _preset_token.original_bytes,
+                               _preset_token.original_bytes is not None and _preset_token.source_schema_version != 3,
+                               None, _preset_token.fingerprint.exists)
+        return deepcopy(document)
+    except (OSError, ValueError, TypeError) as error:
+        _preset_token = None
+        document = presets.migrate_settings_to_schema3(defaults)
+        _set_persistence_state(settings_file, document, None, False,
+                               f"Einstellungen konnten nicht sicher geladen werden: {error}", True)
+        return document
 
-# Einstellungen speichern
-def save_settings(current_settings): # Nimmt die aktuellen Einstellungen als Argument
-    global settings, _loaded_settings_path, _settings_snapshot, _original_settings_bytes
-    global _backup_required, _source_exists
+
+def _board_document(board, document):
+    presets._validate_schema2(board)
+    result = deepcopy(document)
+    for key in ("window_size", "volume", "last_folder"):
+        if key in board:
+            result[key] = deepcopy(board[key])
+    active = next(p for p in result["presets"] if UUID(p["id"]) == UUID(result["active_preset_id"]))
+    for key in ("buttons", "fadeout_duration", "button_height"):
+        active[key] = deepcopy(board[key])
+    return presets.validate_schema3_settings(result)
+
+
+def save_settings(current_settings):
+    """All regular writes use the schema-3 storage lock/token/backup protocol.
+
+    Existing GUI callers may supply the flat active-board projection (schema 2).
+    This projection is merged into the single document, never persisted alone.
+    """
+    global settings, _preset_token, _write_blocked_error
     if _loaded_settings_path != settings_file:
         _inspect_unloaded_settings_path()
     if _write_blocked_error:
         return _save_result(False, error=_write_blocked_error)
     try:
-        normalized = _normalize_settings_data(current_settings)
-        if _source_exists and _settings_snapshot is not None and normalized == _settings_snapshot:
+        if not isinstance(current_settings, dict):
+            raise ValueError("Einstellungen müssen ein Objekt sein.")
+        document = (presets.validate_schema3_settings(current_settings)
+                    if current_settings.get("schema_version") == 3 else
+                    _board_document(current_settings, _settings_snapshot))
+        if _source_exists and document == _settings_snapshot:
+            # Even a skipped save must detect another writer.
+            preset_storage._check_expected(settings_file, _preset_token)
             return _save_result(True, skipped=True)
-        serialized = json.dumps(normalized, indent=4, ensure_ascii=False).encode("utf-8")
-        settings_file.parent.mkdir(parents=True, exist_ok=True)
-        if _backup_required:
-            backup_error = _ensure_migration_backup()
-            if backup_error:
-                return _save_result(False, error=backup_error)
-
-        temporary_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=settings_file.parent,
-                prefix=f".{settings_file.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
-                temporary_file.write(serialized)
-                temporary_file.flush()
-                os.fsync(temporary_file.fileno())
-            os.replace(temporary_path, settings_file)
-        except Exception:
-            if temporary_path is not None:
-                try:
-                    temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-            raise
-
-        settings = deepcopy(normalized)
-        _loaded_settings_path = Path(settings_file)
-        _settings_snapshot = deepcopy(normalized)
-        _original_settings_bytes = serialized
-        _backup_required = False
-        _source_exists = True
-        print("Einstellungen gespeichert.")
+        # Check each existing ancestor before creating any missing directory.
+        for parent in reversed(settings_file.parents):
+            if os.path.lexists(parent):
+                preset_storage._stat(parent, directory=True)
+            else:
+                parent.mkdir(mode=0o700)
+        if _preset_token is None:
+            token = preset_storage.load_preset_settings(
+                settings_file, initialize=True, initial_settings=_default_settings(),
+                legacy_normalizer=_normalize_settings_data)
+            if token.fingerprint.exists:
+                raise ValueError("Settingsdatei wurde seit dem Start neu angelegt; bitte neu laden.")
+            _preset_token = token
+        _preset_token = preset_storage.save_preset_settings(settings_file, document, expected=_preset_token)
+        settings = deepcopy(document)
+        _set_persistence_state(settings_file, document, _preset_token.original_bytes, False, None, True)
         return _save_result(True)
-    except (OSError, TypeError, ValueError) as error:
-        message = f"Die Settingsdatei konnte nicht sicher gespeichert werden: {error}"
-        print(message)
-        return _save_result(False, error=message)
+    except (OSError, ValueError, TypeError) as error:
+        if getattr(error, "outcome", None) in ("saved", "indeterminate"):
+            _write_blocked_error = f"Speicherzustand unklar; bitte schließen und neu laden: {error}"
+        return _save_result(False, error=str(error))
+
 
 def calculate_effective_volume(global_percent, button_db):
     """Convert global percent and a per-button dB offset to pygame's 0..1 range."""
@@ -374,6 +332,7 @@ def _allocate_end_event(index, channel):
         if _next_end_event >= limit:
             _next_end_event = first
         if event_type not in _playbacks_by_event:
+            _issued_end_events.add(event_type)
             _playbacks_by_event[event_type] = (index, channel)
             _events_by_button[index] = event_type
             return event_type
@@ -504,55 +463,98 @@ def set_volume_logic(volume_percent):
     print(f"Lautstärke auf {volume_percent}% gesetzt (Logik)")
     return {"volume_set": volume_percent} # Rückmeldung für GUI
 
+def _apply_document(document):
+    global settings, button_texts, button_colors, jingle_paths, button_volumes
+    global buttons_per_row, fadeout_duration, button_height, set_volume
+    settings = deepcopy(document)
+    board = presets.extract_active_board(document)
+    button_texts = board["buttons"]["texts"]
+    button_colors = board["buttons"]["colors"]
+    jingle_paths = board["buttons"]["paths"]
+    button_volumes = board["buttons"]["volumes"]
+    buttons_per_row = board["buttons"]["per_row"]
+    fadeout_duration = board["fadeout_duration"]
+    button_height = board["button_height"]
+    set_volume = board["volume"]
+
+
 def initialize_settings():
-    global settings, button_texts, button_colors, jingle_paths, buttons_per_row, fadeout_duration, button_height, set_volume
-    settings = load_settings()
-    button_texts = settings["buttons"]["texts"]
-    button_colors = settings["buttons"]["colors"]
-    jingle_paths = settings["buttons"]["paths"]
-    # initialize per-button volumes
-    global button_volumes
-    button_volumes = settings["buttons"].get("volumes", [0] * len(jingle_paths))
-    buttons_per_row = settings["buttons"]["per_row"]
-    if len(buttons_per_row) < DEFAULT_BUTTON_ROW_COUNT:
-        buttons_per_row += [0] * (DEFAULT_BUTTON_ROW_COUNT - len(buttons_per_row))
-    fadeout_duration = settings["fadeout_duration"]
-    button_height = settings["button_height"]
-    set_volume = settings["volume"]
-    # Ensure last_folder exists in settings
-    if "last_folder" not in settings or not settings.get("last_folder"):
-        settings["last_folder"] = str(Path.home())
-    # Ensure window_size always exists
-    if "window_size" not in settings:
-        settings["window_size"] = [DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT]
-    print(f"buttons_per_row: {buttons_per_row} (Typ: {type(buttons_per_row)})")
+    _apply_document(load_settings())
+
 
 def get_current_settings():
-    global settings, button_texts, button_colors, jingle_paths, buttons_per_row, fadeout_duration, button_height, set_volume
-    # Fallback für window_size, falls nicht vorhanden
-    window_size = settings.get("window_size", [DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT])
-    current = deepcopy(settings) if isinstance(settings, dict) else {}
-    current_buttons = current.get("buttons")
-    if not isinstance(current_buttons, dict):
-        current_buttons = {}
-    current_buttons.update({
-        "texts": button_texts[:],
-        "colors": button_colors[:],
-        "paths": jingle_paths[:],
-        "volumes": button_volumes[:],
-        "per_row": buttons_per_row[:],
-    })
-    current.update({
-        "schema_version": CURRENT_SCHEMA_VERSION,
-        "buttons": current_buttons,
-        "fadeout_duration": fadeout_duration,
-        "button_height": button_height,
-        "window_size": window_size[:],
-        "volume": set_volume,
-        "last_folder": settings.get("last_folder", str(Path.home())),
-    })
-    current.pop("background_image", None)
+    """Detached schema-2 active-board projection for existing GUI/export consumers."""
+    current = presets.extract_active_board(settings)
+    current["buttons"] = {"texts": button_texts[:], "colors": button_colors[:],
+                          "paths": jingle_paths[:], "volumes": button_volumes[:],
+                          "per_row": buttons_per_row[:]}
+    current.update(fadeout_duration=fadeout_duration, button_height=button_height, volume=set_volume)
     return current
+
+
+def get_preset_settings():
+    return _board_document(get_current_settings(), settings)
+
+
+def get_settings_storage_token():
+    """Detached concurrency token for a confirmed import; never refresh implicitly."""
+    if _write_blocked_error or _preset_token is None:
+        raise ValueError("Kein gültiger Speicherstand vorhanden; bitte zuerst speichern oder neu laden.")
+    return deepcopy(_preset_token)
+
+
+def manage_presets(operation, *args, **kwargs):
+    """Persist unsaved board first, then atomically commit the requested operation."""
+    result = save_settings(get_current_settings())
+    if not result["success"]:
+        return result
+    try:
+        document = get_preset_settings()
+        if operation == "switch":
+            target = presets._preset_index(document, args[0])
+            document["active_preset_id"] = document["presets"][target]["id"]
+        else:
+            function = {"create": presets.create_preset, "duplicate": presets.duplicate_preset,
+                        "rename": presets.rename_preset, "delete": presets.delete_preset}[operation]
+            document = function(document, *args, **kwargs)
+        switching = UUID(document["active_preset_id"]) != UUID(settings["active_preset_id"])
+        if switching:
+            stop_all_playback()
+        result = save_settings(document)
+        if result["success"]:
+            _apply_document(document)
+        return result
+    except (ValueError, OSError, RuntimeError) as error:
+        message = str(error)
+        if isinstance(error, presets.PresetValidationError) and error.code == "duplicate_name":
+            message = "Ein Preset mit diesem Namen existiert bereits (auch Unicode-/Großschreibungsvarianten)."
+        elif isinstance(error, presets.PresetValidationError) and error.location == "preset.name":
+            message = "Ungültiger Presetname: Bitte einen nichtleeren Namen ohne äußere Leerzeichen oder Steuerzeichen eingeben."
+        return _save_result(False, error=message)
+
+
+def stop_all_playback():
+    """Stop all mixer channels, including untracked fades; retire their events."""
+    if pygame_available:
+        event_ids = set(_playbacks_by_event) | _issued_end_events
+        for index in range(pygame.mixer.get_num_channels()):
+            channel = pygame.mixer.Channel(index)
+            event = channel.get_endevent() if hasattr(channel, "get_endevent") else 0
+            if event:
+                event_ids.add(event)
+            channel.set_endevent(0)
+            channel.stop()
+        for channel in list(playing_channels.values()):
+            channel.set_endevent(0)
+            channel.stop()
+        if event_ids and hasattr(pygame.event, "clear"):
+            pygame.event.clear(list(event_ids))
+    playing_channels.clear()
+    _playbacks_by_event.clear()
+    _events_by_button.clear()
+    _issued_end_events.clear()
+    _sync_legacy_playback_state()
+    # Do not rewind _next_end_event: queued old IDs must not be reused.
 
 
 def get_settings_persistence_status():

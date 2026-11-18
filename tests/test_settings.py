@@ -1,10 +1,22 @@
 import json
+import hashlib
+import jingleplayer_presets as presets
 import os
 from pathlib import Path
 
 import pytest
 
 import jingleplayer_logic as logic
+
+
+def load_board():
+    return presets.extract_active_board(logic.load_settings())
+
+
+def backup_path(path):
+    existing = list(path.parent.glob(path.name + ".pre-presets.*.json"))
+    return existing[0] if existing else path.with_name(
+        path.name + ".pre-presets." + hashlib.sha256(path.read_bytes()).hexdigest() + ".json")
 
 
 def old_settings(buttons):
@@ -39,7 +51,7 @@ def test_volume_settings_are_migrated_to_button_count(tmp_path, monkeypatch, exi
     path.write_text(json.dumps(old_settings(buttons)), encoding="utf-8")
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
 
     assert loaded["buttons"]["volumes"][:len(expected)] == expected
     assert loaded["buttons"]["volumes"][len(expected):] == [0] * (logic.DEFAULT_BUTTON_COUNT - len(expected))
@@ -53,7 +65,7 @@ def test_missing_legacy_top_level_values_receive_defaults(tmp_path, monkeypatch)
     path = tmp_path / "settings.json"
     path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     assert len(loaded["buttons"]["volumes"]) == logic.DEFAULT_BUTTON_COUNT
     assert loaded["fadeout_duration"] == logic.DEFAULT_FADEOUT_DURATION
 
@@ -81,7 +93,7 @@ def test_short_legacy_settings_are_extended_to_all_slots(tmp_path, monkeypatch):
     path.write_text(json.dumps(old_settings(buttons)), encoding="utf-8")
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
 
     assert loaded["buttons"]["texts"][:2] == ["A", "B"]
     assert loaded["buttons"]["texts"][2:] == [
@@ -108,10 +120,10 @@ def test_full_and_oversized_slot_lists_are_normalized_without_changing_prefix(tm
     path.write_text(json.dumps(old_settings(buttons)), encoding="utf-8")
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
 
-    for key in ("texts", "colors", "paths", "volumes"):
-        assert loaded["buttons"][key] == buttons[key][:logic.DEFAULT_BUTTON_COUNT]
+    assert logic.get_settings_persistence_status()["write_blocked"] is True
+    assert json.loads(path.read_text())["buttons"] == buttons
 
 
 def test_reducing_and_restoring_per_row_preserves_all_slot_data(monkeypatch):
@@ -210,16 +222,16 @@ def test_reduced_layout_persists_and_reloads_all_slots(tmp_path, monkeypatch):
     texts = [f"Persistent {index}" for index in range(logic.DEFAULT_BUTTON_COUNT)]
     colors = ["blue"] * logic.DEFAULT_BUTTON_COUNT
     paths = [f"{index}.wav" for index in range(logic.DEFAULT_BUTTON_COUNT)]
-    monkeypatch.setattr(logic, "button_volumes", list(range(logic.DEFAULT_BUTTON_COUNT)))
+    monkeypatch.setattr(logic, "button_volumes", [(i % 21) - 10 for i in range(logic.DEFAULT_BUTTON_COUNT)])
 
     logic.update_settings_data(texts, colors, paths, [2, 0, 0, 0, 0], 1000, 2, [800, 600], 80)
     logic.save_settings(logic.get_current_settings())
-    reloaded = logic.load_settings()
+    reloaded = load_board()
 
     assert reloaded["buttons"]["per_row"] == [2, 0, 0, 0, 0]
     assert reloaded["buttons"]["texts"] == texts
     assert reloaded["buttons"]["paths"] == paths
-    assert reloaded["buttons"]["volumes"] == list(range(logic.DEFAULT_BUTTON_COUNT))
+    assert reloaded["buttons"]["volumes"] == [(i % 21) - 10 for i in range(logic.DEFAULT_BUTTON_COUNT)]
 
 
 def full_settings(slot_count=50, schema_version=None):
@@ -227,7 +239,7 @@ def full_settings(slot_count=50, schema_version=None):
         "texts": [f"Text {index}" for index in range(slot_count)],
         "colors": [f"Color {index}" for index in range(slot_count)],
         "paths": [f"{index}.wav" for index in range(slot_count)],
-        "volumes": list(range(slot_count)),
+        "volumes": [(i % 21) - 10 for i in range(slot_count)],
         "per_row": [8, 5, 6, 4, 9],
     })
     if schema_version is not None:
@@ -246,16 +258,16 @@ def test_new_install_load_is_side_effect_free_and_first_save_creates_file(tmp_pa
     path = tmp_path / "missing-parent" / "jingleplayer_settings.json"
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
 
-    assert loaded["schema_version"] == logic.CURRENT_SCHEMA_VERSION
+    assert loaded["schema_version"] == 2  # Explicit GUI/export projection
     assert len(loaded["buttons"]["texts"]) == logic.DEFAULT_BUTTON_COUNT
     assert not path.parent.exists()
     assert not path.exists()
     result = logic.save_settings(loaded)
     assert result == {"success": True, "skipped": False, "error": None}
     assert path.is_file()
-    assert not (path.parent / logic.PRE_PYSIDE6_BACKUP_NAME).exists()
+    assert not backup_path(path).exists()
 
 
 @pytest.mark.parametrize("slot_count", [32, 40, 50])
@@ -266,7 +278,7 @@ def test_unversioned_load_normalizes_without_writing_and_unchanged_save_skips(
     original = write_settings_bytes(path, full_settings(slot_count))
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
 
     assert path.read_bytes() == original
     assert len(loaded["buttons"]["texts"]) == 50
@@ -275,38 +287,38 @@ def test_unversioned_load_normalizes_without_writing_and_unchanged_save_skips(
     result = logic.save_settings(loaded)
     assert result == {"success": True, "skipped": True, "error": None}
     assert path.read_bytes() == original
-    assert not (tmp_path / logic.PRE_PYSIDE6_BACKUP_NAME).exists()
+    assert not (backup_path(path)).exists()
 
 
 @pytest.mark.parametrize("slot_count", [32, 40, 50])
 @pytest.mark.parametrize("schema_version", [None, 1])
-def test_first_changed_legacy_save_creates_exact_backup_and_schema_two(
+def test_first_changed_legacy_save_creates_exact_backup_and_schema_three(
     tmp_path, monkeypatch, schema_version, slot_count
 ):
     path = tmp_path / "jingleplayer_settings.json"
     original = write_settings_bytes(path, full_settings(slot_count, schema_version))
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 81
 
     result = logic.save_settings(loaded)
 
     assert result["success"] is True
     assert result["skipped"] is False
-    assert (tmp_path / logic.PRE_PYSIDE6_BACKUP_NAME).read_bytes() == original
+    assert (backup_path(path)).read_bytes() == original
     saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["schema_version"] == 2
-    assert len(saved["buttons"]["texts"]) == 50
+    assert saved["schema_version"] == 3
+    assert len(presets.extract_active_board(saved)["buttons"]["texts"]) == 50
     assert logic.get_settings_persistence_status()["backup_required"] is False
 
 
 def test_identical_existing_backup_allows_retry_without_overwrite(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
-    backup = tmp_path / logic.PRE_PYSIDE6_BACKUP_NAME
     original = write_settings_bytes(path, full_settings(40))
+    backup = backup_path(path)
     backup.write_bytes(original)
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 82
 
     result = logic.save_settings(loaded)
@@ -317,11 +329,11 @@ def test_identical_existing_backup_allows_retry_without_overwrite(tmp_path, monk
 
 def test_different_existing_backup_blocks_save(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
-    backup = tmp_path / logic.PRE_PYSIDE6_BACKUP_NAME
     original = write_settings_bytes(path, full_settings(40))
+    backup = backup_path(path)
     backup.write_bytes(b"different")
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 83
 
     result = logic.save_settings(loaded)
@@ -335,16 +347,16 @@ def test_backup_creation_failure_blocks_save(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
     original = write_settings_bytes(path, full_settings(40))
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 84
-    real_open = open
+    real_open = Path.open
 
     def failing_open(file, mode="r", *args, **kwargs):
-        if Path(file).name == logic.PRE_PYSIDE6_BACKUP_NAME and mode == "xb":
+        if ".pre-presets." in Path(file).name and mode == "xb":
             raise PermissionError("backup denied")
         return real_open(file, mode, *args, **kwargs)
 
-    monkeypatch.setattr("builtins.open", failing_open)
+    monkeypatch.setattr(Path, "open", failing_open)
 
     result = logic.save_settings(loaded)
 
@@ -354,10 +366,10 @@ def test_backup_creation_failure_blocks_save(tmp_path, monkeypatch):
 
 def test_failed_save_after_backup_keeps_backup_and_original(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
-    backup = tmp_path / logic.PRE_PYSIDE6_BACKUP_NAME
     original = write_settings_bytes(path, full_settings(40))
+    backup = backup_path(path)
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 88
     monkeypatch.setattr(
         logic.os,
@@ -373,15 +385,15 @@ def test_failed_save_after_backup_keeps_backup_and_original(tmp_path, monkeypatc
     assert list(tmp_path.glob("*.tmp")) == []
 
 
-def test_schema_two_save_needs_no_migration_backup(tmp_path, monkeypatch):
+def test_schema_two_save_creates_pre_preset_migration_backup(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
     write_settings_bytes(path, full_settings(50, 2))
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 85
 
     assert logic.save_settings(loaded)["success"] is True
-    assert not (tmp_path / logic.PRE_PYSIDE6_BACKUP_NAME).exists()
+    assert (backup_path(path)).exists()
 
 
 def test_future_schema_is_write_blocked_and_unchanged(tmp_path, monkeypatch):
@@ -389,12 +401,12 @@ def test_future_schema_is_write_blocked_and_unchanged(tmp_path, monkeypatch):
     original = write_settings_bytes(path, full_settings(50, 99))
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
     status = logic.get_settings_persistence_status()
     result = logic.save_settings(loaded)
 
     assert status["write_blocked"] is True
-    assert "schema_version 99" in status["error"]
+    assert "schema_version" in status["error"]
     assert result["success"] is False
     assert path.read_bytes() == original
 
@@ -408,7 +420,7 @@ def test_invalid_existing_data_is_write_blocked(tmp_path, monkeypatch, raw):
     path.write_bytes(raw)
     monkeypatch.setattr(logic, "settings_file", path)
 
-    loaded = logic.load_settings()
+    loaded = load_board()
     result = logic.save_settings(loaded)
 
     assert logic.get_settings_persistence_status()["write_blocked"] is True
@@ -420,16 +432,11 @@ def test_read_error_blocks_later_save(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
     original = write_settings_bytes(path, full_settings(50, 2))
     monkeypatch.setattr(logic, "settings_file", path)
-    path_type = type(path)
-    real_read_bytes = path_type.read_bytes
-
     def failing_read(self):
-        if self == path:
-            raise PermissionError("read denied")
-        return real_read_bytes(self)
+        raise PermissionError("read denied")
 
-    monkeypatch.setattr(path_type, "read_bytes", failing_read)
-    loaded = logic.load_settings()
+    monkeypatch.setattr(logic.preset_storage, "_read", failing_read)
+    loaded = load_board()
 
     result = logic.save_settings(loaded)
 
@@ -440,7 +447,7 @@ def test_read_error_blocks_later_save(tmp_path, monkeypatch):
 def test_atomic_save_uses_replace_and_leaves_no_temp_file(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["last_folder"] = "Übung"
     replace_calls = []
     real_replace = os.replace
@@ -468,7 +475,7 @@ def test_atomic_save_failure_preserves_original_and_removes_temp(
     path = tmp_path / "jingleplayer_settings.json"
     original = write_settings_bytes(path, full_settings(50, 2))
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 86
     if failure == "flush":
         real_named_temporary_file = logic.tempfile.NamedTemporaryFile
@@ -514,7 +521,7 @@ def test_serialization_failure_preserves_original(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
     original = write_settings_bytes(path, full_settings(50, 2))
     monkeypatch.setattr(logic, "settings_file", path)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["unknown_object"] = object()
 
     result = logic.save_settings(loaded)
@@ -523,24 +530,18 @@ def test_serialization_failure_preserves_original(tmp_path, monkeypatch):
     assert path.read_bytes() == original
 
 
-def test_unknown_supported_keys_are_preserved_but_background_image_is_removed(
-    tmp_path, monkeypatch
-):
+def test_unknown_legacy_fields_block_migration_without_discarding_data(tmp_path, monkeypatch):
     path = tmp_path / "jingleplayer_settings.json"
     data = full_settings(50, 2)
     data["custom_root"] = {"keep": True}
     data["background_image"] = "obsolete.png"
     data["buttons"]["custom_buttons"] = "keep"
-    write_settings_bytes(path, data)
+    original = write_settings_bytes(path, data)
     monkeypatch.setattr(logic, "settings_file", path)
     loaded = logic.load_settings()
-    loaded["volume"] = 87
-
-    assert logic.save_settings(loaded)["success"] is True
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    assert saved["custom_root"] == {"keep": True}
-    assert saved["buttons"]["custom_buttons"] == "keep"
-    assert "background_image" not in saved
+    assert logic.get_settings_persistence_status()["write_blocked"]
+    assert not logic.save_settings(loaded)["success"]
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize(
@@ -561,7 +562,7 @@ def test_path_change_to_invalid_existing_target_is_write_blocked(
     path_b.parent.mkdir(parents=True)
     path_b.write_bytes(target_bytes)
     monkeypatch.setattr(logic, "settings_file", path_a)
-    loaded = logic.load_settings()
+    loaded = load_board()
     loaded["volume"] = 89
     replace_calls = []
     monkeypatch.setattr(logic, "settings_file", path_b)
@@ -582,7 +583,7 @@ def test_successful_save_after_path_change_updates_loaded_path_and_next_save_ski
     path_b = tmp_path / "b" / "jingleplayer_settings.json"
     write_settings_bytes(path_a, full_settings(50, 2))
     monkeypatch.setattr(logic, "settings_file", path_a)
-    loaded = logic.load_settings()
+    loaded = load_board()
     monkeypatch.setattr(logic, "settings_file", path_b)
 
     first_result = logic.save_settings(loaded)

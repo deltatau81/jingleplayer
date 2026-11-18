@@ -78,6 +78,9 @@ def isolated_settings(monkeypatch):
     monkeypatch.setattr(gui.jingleplayer_logic, "set_button_volume", set_button_volume)
     monkeypatch.setattr(gui.jingleplayer_logic, "set_last_folder", set_last_folder)
 
+    import jingleplayer_presets as presets
+    monkeypatch.setattr(gui.jingleplayer_logic, "get_preset_settings", lambda:
+        presets.migrate_settings_to_schema3(gui.jingleplayer_logic._default_settings()))
     return settings, initialize_calls, saved_settings
 
 
