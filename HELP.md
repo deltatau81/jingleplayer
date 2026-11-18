@@ -30,6 +30,30 @@ die Sicherung an den bestätigten Settingspfad zurückkopieren.
 
 ## Hauptfenster
 
+### Hintergrundbild des aktiven Presets
+
+Im Menü **Presets → Hintergrundbild auswählen…** eine lokale PNG- oder JPEG-Datei
+wählen. Der Bildpfad wird im Menü angezeigt. Auswahl speichert sofort und zeigt das
+Bild hinter den Kacheln; Abbruch des Dateidialogs ändert nichts.
+**Hintergrundbild entfernen** leert nur diese Einstellung, nicht die externe Datei.
+
+Jedes Preset hat seine eigene Zuordnung. Duplizieren übernimmt sie; neue Presets
+beginnen ohne Bild. Beim Wechsel und Neustart wird die passende Zuordnung geladen.
+Das Bild füllt den Kachelbereich ohne Verzerrung, überstehende Teile werden mittig
+abgeschnitten. Fenstergrößenänderungen verwenden das geladene Bild weiter.
+Buttonfarben, Texte und Klicks bleiben erhalten; der Spielindikator kontrastiert
+mit der Buttonfarbe. Lautstärkeregler, Menüs und Dialoge werden nicht überlagert.
+
+Ist ein gespeichertes Bild nicht erreichbar oder beschädigt, erscheint der normale
+Hintergrund und eine Statusmeldung. Die Zuordnung bleibt erhalten und kann über
+das Menü korrigiert oder entfernt werden. Eine ungültige neu gewählte Datei wird
+nicht gespeichert. Unterstützte Grenzen: 32 MiB, 40 Megapixel, höchstens 16384 Pixel
+je Dimension. Sehr große Bilder können beim ersten Laden kurz Rechenzeit benötigen.
+
+Portable Pakete enthalten weiterhin keine Bilder. Import als neues Preset beginnt
+ohne Hintergrund; Ersetzen entfernt das Bild nur beim aktiven Preset. Andere Presets
+bleiben unverändert. Portabler Bildtransport folgt erst in Phase 18D.
+
 ### Jingle-Kacheln
 
 Jingleplayer verwaltet 50 dauerhafte Jingle-Plätze in fünf Reihen. Für jede Reihe kann eingestellt werden, wie viele Kacheln sichtbar sind:

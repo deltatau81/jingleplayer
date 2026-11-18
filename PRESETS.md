@@ -14,6 +14,42 @@ Dialoge vor dem Wechsel speichern oder schließen. Namen sind nach Unicode-Norma
 
 ## Daten und Migration
 
+### Optionale lokale Hintergrundbilder (Phase 18B)
+
+**Presets → Hintergrundbild auswählen…** setzt ein PNG/JPEG für das aktive Preset;
+der gespeicherte Pfad wird im Menü gezeigt. Entfernen leert nur die Zuordnung.
+Auswahl speichert sofort; Abbruch oder ungültige neue Dateien behalten den alten
+Stand. Duplizieren kopiert den Pfad, nicht das Bild. Löschen eines Presets löscht
+keine externen Bilder. Neue Presets beginnen ohne Hintergrund.
+
+Das optionale Stringfeld `background_image` liegt direkt im Preseteintrag.
+Abwesend oder `""` bedeutet deaktiviert. Bestehende Schema-3-Dokumente ohne Feld
+bleiben gültig und werden nicht durch eine Default-Ergänzung umgeschrieben;
+Schema-2-Migration erzeugt weiterhin keine Bildzuweisung. Es gibt keine neue
+Schemaversion und keine eingebetteten Bildbytes. Ältere Entwicklungsstände mit
+strikter Schema-3-Validierung kennen das neue optionale Feld möglicherweise nicht.
+
+Die Dateiauswahl speichert absolute native Pfade einschließlich Unicode. Manuell
+eingetragene relative Bildpfade werden ausdrücklich gegen das Settingsverzeichnis
+aufgelöst, nie gegen das Prozess-Arbeitsverzeichnis. Audiopfadregeln ändern sich
+dadurch nicht. Nicht erreichbare oder defekte Bilder blockieren weder Startup noch
+Speichern: Statusmeldung, normale Hintergrunddarstellung, Pfad bleibt bestehen.
+
+Der Kachelbereich zeichnet das einmal dekodierte Bild hinter seinen Kindwidgets.
+Seitenverhältnis bleibt erhalten, Bereich wird gefüllt und mittig beschnitten;
+skaliertes Ergebnis wird pro Größe gecacht. Resize liest keine Bilddatei neu.
+Regler und Menüs liegen außerhalb. Opaque Buttonflächen und kontrastierende
+Texte/Spielindikatoren erhalten die Bedienbarkeit. Unterstützte Dekodiergrenzen:
+32 MiB kodierte Datei, 40 Millionen Pixel, 16384 Pixel pro Achse. Große Dateien
+können den GUI-Thread beim initialen Laden kurz beanspruchen; kein Datei-Watcher
+oder automatisches Neuladen während Resize. Ein bereits geladenes Bild kann daher
+bis zum nächsten Preset-Wechsel/Neustart sichtbar bleiben, wenn die Quelle verschoben wird.
+
+Schema-2-Paketsnapshots lassen `background_image` bewusst weg. Ein neuer Import
+hat kein Bild; Ersetzen eines aktiven Presets entfernt dessen Hintergrundfeld,
+behält aber dessen ID/Name. Andere Presets behalten ihre Zuordnungen. Externe
+Bilddateien und Paketformat bleiben unangetastet. Bildmitnahme folgt in Phase 18D.
+
 Eine Hauptdatei: `~/.jingleplayer/jingleplayer_settings.json`, lokal `schema_version: 3`.
 
 - Global: `window_size`, `volume`, `last_folder`.

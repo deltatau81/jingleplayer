@@ -847,6 +847,9 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
                       if uuid.UUID(p["id"]) == uuid.UUID(next_settings["active_preset_id"]))
         for key in ("buttons", "fadeout_duration", "button_height"):
             active[key] = deepcopy(validated.settings[key])
+        # Version-1 packages contain audio/board data only. Replacing a board
+        # also clears its local background; other presets remain untouched.
+        active.pop("background_image", None)
         active["buttons"]["paths"] = [
             str(installed.joinpath(*p.split("/"))) if p else ""
             for p in validated.settings["buttons"]["paths"]]

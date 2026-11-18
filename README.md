@@ -120,6 +120,25 @@ No fallback settings directory is used.
 
 ## Portable Soundboards
 
+### Hintergrundbild pro Preset
+
+Im Menü **Presets → Hintergrundbild auswählen…** ein PNG/JPEG auswählen. Das Bild
+wird sofort für das aktive Preset gespeichert und hinter dessen Jingle-Kacheln
+angezeigt. **Hintergrundbild entfernen** stellt die bisherige Darstellung wieder
+her und löscht keine Bilddatei. Im Menü steht der aktuell gespeicherte Bildpfad.
+Preset-Wechsel und Neustart übernehmen die jeweilige Einstellung automatisch.
+
+Die Darstellung füllt den Kachelbereich proportional aus und beschneidet mittig;
+Resize skaliert das bereits geladene Bild. Buttonfarben und Bedienung bleiben
+erhalten, Menüs und Lautstärkeregler liegen außerhalb der Bildfläche. Fehlende oder
+beschädigte Bilder führen zum normalen Hintergrund mit Statusmeldung; der Pfad
+bleibt gespeichert. Schema 3 bleibt unverändert nummeriert, das Feld ist optional.
+
+Bilder bleiben in Phase 18B lokal: Paketversion 1/Board-Schema 2 enthält weiterhin
+keine Hintergrunddaten. Ein Import als neues Preset startet ohne Bild; Ersetzen des
+aktiven Presets entfernt dessen Hintergrundzuweisung. Andere Presets bleiben
+unverändert. Die portable Bildmitnahme ist für Phase 18D vorgesehen.
+
 Im Menü **Soundboard** stehen **Soundboard exportieren...** und **Soundboard importieren...** bereit. Export: vorhandenen Ziel-Elternordner auswählen, neuen Paketnamen eingeben und gegebenenfalls fehlende Audiozuweisungen ausdrücklich nur für den Export leeren. Alle 50 Plätze einschließlich ausgeblendeter Tasten werden berücksichtigt.
 
 Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. Der Import kann ein neues Preset hinzufügen oder nach ausdrücklicher Auswahl nur das aktive ersetzen. Exportiert wird ausschließlich das aktive Preset; ZIP und Jingle-Pools bleiben nicht implementiert.

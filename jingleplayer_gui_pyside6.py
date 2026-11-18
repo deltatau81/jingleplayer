@@ -8,8 +8,8 @@ import unicodedata
 from pathlib import Path
 from uuid import UUID
 
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtCore import QRectF, QThread, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QIcon, QImageReader, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -42,6 +42,79 @@ import jingleplayer_packages
 MAX_FADEOUT_DURATION_MS = 2_147_483_647
 MIN_BUTTON_HEIGHT = 1
 MAX_BUTTON_HEIGHT = 10
+
+
+def load_background_image(path):
+    """Decode a local PNG/JPEG once, with bounded input and pixel allocation.
+
+    The picker supplies absolute paths; stored relative paths are resolved by the
+    caller against the explicit settings directory. Never writes image files.
+    Limits: 32 MiB encoded, 40 million pixels, 16384 pixels per dimension.
+    """
+    path = Path(path)
+    if not path.is_absolute() or not path.is_file():
+        raise ValueError("Die Bilddatei fehlt oder ist nicht erreichbar.")
+    if path.stat().st_size > 32 * 1024 * 1024:
+        raise ValueError("Das Hintergrundbild ist größer als 32 MiB.")
+    reader = QImageReader(str(path))
+    reader.setDecideFormatFromContent(True)
+    reader.setAutoTransform(True)
+    if not reader.canRead() or bytes(reader.format()).lower() not in (b"png", b"jpeg", b"jpg"):
+        raise ValueError("Die Datei ist kein lesbares PNG- oder JPEG-Bild.")
+    size = reader.size()
+    if (not size.isValid() or size.isEmpty() or size.width() > 16384 or size.height() > 16384 or
+            size.width() * size.height() > 40_000_000):
+        raise ValueError("Das Bild überschreitet die unterstützte Bildgröße (40 Megapixel / 16384 Pixel).")
+    image = reader.read()
+    if image.isNull():
+        raise ValueError(f"Das Bild konnte nicht geladen werden: {reader.errorString()}")
+    return QPixmap.fromImage(image)
+
+
+class BackgroundCanvas(QWidget):
+    """Paint behind child tiles only, with cached aspect-fill/center-crop scaling."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAutoFillBackground(True)
+        self.pixmap = QPixmap()
+        self._scaled = QPixmap()
+        self._scaled_for = None
+
+    def set_background(self, pixmap):
+        self.pixmap = QPixmap(pixmap)
+        self._scaled = QPixmap()
+        self._scaled_for = None
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.pixmap.isNull() or self.width() <= 0 or self.height() <= 0:
+            return
+        ratio = self.devicePixelRatioF()
+        key = (self.size(), ratio)
+        if self._scaled_for != key:
+            # Crop the source before rendering into a viewport-sized cache.
+            # Scaling an extremely wide/tall image first could allocate an
+            # enormous offscreen pixmap even though the window is small.
+            source = QRectF(self.pixmap.rect())
+            aspect = self.width() / self.height()
+            if source.width() / source.height() > aspect:
+                width = source.height() * aspect
+                source = QRectF((source.width() - width) / 2, 0, width, source.height())
+            else:
+                height = source.width() / aspect
+                source = QRectF(0, (source.height() - height) / 2, source.width(), height)
+            self._scaled = QPixmap(self.size() * ratio)
+            self._scaled.setDevicePixelRatio(ratio)
+            self._scaled.fill(Qt.GlobalColor.transparent)
+            cache_painter = QPainter(self._scaled)
+            cache_painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            cache_painter.drawPixmap(QRectF(self.rect()), self.pixmap, source)
+            cache_painter.end()
+            self._scaled_for = key
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._scaled)
 
 
 class PackageJob(QThread):
@@ -117,7 +190,8 @@ class JingleTile(QFrame):
         layout.addWidget(self.label)
 
     def _apply_style(self):
-        border = "3px solid #ffffff" if self.playing else "1px solid rgba(0, 0, 0, 45)"
+        indicator_color = contrasting_text_color(self.display_color.name())
+        border = f"3px solid {indicator_color}" if self.playing else "1px solid rgba(0, 0, 0, 45)"
         self.setStyleSheet(
             "QFrame#jingleTile {"
             f"background-color: {self.display_color.name()};"
@@ -380,6 +454,13 @@ class JingleplayerMainWindow(QMainWindow):
         menu = self.menuBar().addMenu("Presets")
         for text, op in (("Neu…", "create"), ("Duplizieren…", "duplicate"), ("Umbenennen…", "rename"), ("Löschen…", "delete")):
             menu.addAction(text).triggered.connect(lambda checked=False, operation=op: self._manage_preset(operation))
+        menu.addSeparator()
+        self.background_info = menu.addAction("Kein Hintergrundbild")
+        self.background_info.setEnabled(False)
+        menu.addAction("Hintergrundbild auswählen…").triggered.connect(self._choose_background)
+        self.remove_background_action = menu.addAction("Hintergrundbild entfernen")
+        self.remove_background_action.triggered.connect(lambda: self._set_background_path("", QPixmap()))
+        self._background_key = None
         self._refresh_preset_selector()
 
         self.sound_end_timer = QTimer(self)
@@ -404,6 +485,70 @@ class JingleplayerMainWindow(QMainWindow):
                                                    if UUID(p["id"]) == UUID(document["active_preset_id"])))
         finally:
             self.preset_combo.blockSignals(blocked)
+        self._refresh_background()
+
+    def _refresh_background(self):
+        document = jingleplayer_logic.get_preset_settings()
+        active = next(p for p in document["presets"] if UUID(p["id"]) == UUID(document["active_preset_id"]))
+        raw = active.get("background_image", "")
+        key = (active["id"], raw)
+        self.background_info.setText(f"Hintergrund: {raw}" if raw else "Kein Hintergrundbild")
+        self.background_info.setToolTip(raw)
+        self.remove_background_action.setEnabled(bool(raw))
+        if self._background_key == key:
+            return
+        self._background_key = key
+        pixmap = QPixmap()
+        if raw:
+            try:
+                path = Path(raw)
+                if not path.is_absolute():
+                    path = Path(jingleplayer_logic.settings_file).parent / path
+                pixmap = load_background_image(path)
+            except (OSError, ValueError) as error:
+                self.statusBar().showMessage(f"Hintergrund nicht verfügbar: {raw} – {error}", 15000)
+        self.background_canvas.set_background(pixmap)
+
+    def _choose_background(self):
+        if not self._begin_package_operation():
+            return
+        try:
+            path, _ = QFileDialog.getOpenFileName(self, "Hintergrundbild auswählen", "",
+                                                 "Bilder (*.png *.jpg *.jpeg)")
+            if not path:
+                return
+            pixmap = load_background_image(Path(path))
+            self._save_background_path(path, pixmap)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "Hintergrundbild konnte nicht geladen werden", str(error))
+        finally:
+            self._finish_package_operation()
+
+    def _set_background_path(self, path, pixmap):
+        if not self._begin_package_operation():
+            return
+        try:
+            self._save_background_path(path, pixmap)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "Hintergrundbild nicht gespeichert", str(error))
+        finally:
+            self._finish_package_operation()
+
+    def _save_background_path(self, path, pixmap):
+        document = jingleplayer_logic.get_preset_settings()
+        active = next(p for p in document["presets"] if UUID(p["id"]) == UUID(document["active_preset_id"]))
+        active["background_image"] = path
+        result = jingleplayer_logic.save_settings(document)
+        if not result["success"]:
+            if jingleplayer_logic.get_settings_persistence_status()["write_blocked"]:
+                self._settings_writes_blocked = self._restart_required = True
+            QMessageBox.critical(self, "Hintergrundbild nicht gespeichert", result["error"])
+            return
+        self._background_key = (active["id"], path)
+        self.background_canvas.set_background(pixmap)
+        self.background_info.setText(f"Hintergrund: {path}" if path else "Kein Hintergrundbild")
+        self.background_info.setToolTip(path)
+        self.remove_background_action.setEnabled(bool(path))
 
     def _manage_preset(self, operation):
         if not self._begin_package_operation():
@@ -898,10 +1043,11 @@ class JingleplayerMainWindow(QMainWindow):
 
         self.volume_slider.valueChanged.connect(self._handle_volume_change)
 
-        self.tile_layout = QVBoxLayout()
+        self.background_canvas = BackgroundCanvas(central_widget)
+        self.tile_layout = QVBoxLayout(self.background_canvas)
         self.tile_layout.setContentsMargins(0, 0, 0, 0)
         self.tile_layout.setSpacing(8)
-        main_layout.addLayout(self.tile_layout, 1)
+        main_layout.addWidget(self.background_canvas, 1)
         self.setCentralWidget(central_widget)
         self._rebuild_jingle_layout()
 
@@ -918,7 +1064,7 @@ class JingleplayerMainWindow(QMainWindow):
         next_index = 0
 
         for row_index in range(jingleplayer_logic.DEFAULT_BUTTON_ROW_COUNT):
-            row_widget = QWidget(self.centralWidget())
+            row_widget = QWidget(self.background_canvas)
             row_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 0, 0, 0)

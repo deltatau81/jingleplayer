@@ -10,6 +10,10 @@ absolute, relative, Windows and POSIX spellings remain untouched. No file check,
 extension restriction or package-relative-path rule applies to local settings.
 
 UUID strings must use the hyphenated UUID representation (case is preserved).
+Each preset may additionally contain background_image, a local path string.
+Absent or empty means disabled; validation never checks/resolves files or adds
+the field to old documents. Schema-2 extraction deliberately omits it; new presets
+start without an image, duplicates copy the string, deletion never touches files.
 Names must be nonempty without surrounding whitespace/control characters;
 NFC+casefold-equivalent names and equivalent UUIDs are duplicates. Display names
 are never paths. All results are detached copies; unknown fields fail explicitly
@@ -156,7 +160,10 @@ def validate_schema3_settings(data):
     _require(type(presets) is list and bool(presets), "presets", "presets", "expected nonempty preset list")
     ids, names = set(), set()
     for index, preset in enumerate(presets):
-        _object(preset, _BOARD | {"id", "name"}, f"presets[{index}]")
+        optional = {"background_image"} if isinstance(preset, dict) and "background_image" in preset else set()
+        _object(preset, _BOARD | {"id", "name"} | optional, f"presets[{index}]")
+        if optional:
+            _string(preset["background_image"], f"presets[{index}].background_image")
         identity = UUID(validate_preset_id(preset["id"]))
         name = _name_key(validate_preset_name(preset["name"]))
         _require(identity not in ids, "duplicate_id", f"presets[{index}].id", "duplicate UUID")
