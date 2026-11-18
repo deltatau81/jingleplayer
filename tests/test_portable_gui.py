@@ -99,6 +99,8 @@ def make_package(tmp_path):
     board["window_size"] = [800, 500]
     board["buttons"]["texts"][0] = "Imported"
     board["buttons"]["texts"][49] = "Hidden Unicode 音楽"
+    board["buttons"]["colors"][49] = "#abcdef"
+    board["buttons"]["volumes"][49] = 7
     sound = tmp_path / "Grüße.MP3"
     sound.write_bytes(b"test audio bytes")
     board["buttons"]["paths"][0] = board["buttons"]["paths"][49] = str(sound)
@@ -252,7 +254,9 @@ def test_real_import_reload_close_and_hidden_slots(context, tmp_path, monkeypatc
     assert window.jingle_texts[0] == "Imported" and window.jingle_texts[49] == "Hidden Unicode 音楽"
     assert len(window.jingle_paths) == 50 and window.jingle_paths[0] == window.jingle_paths[49]
     assert all(not tile.playing for tile in window.jingle_tiles)
-    assert window.jingle_volumes == [-3] * 50
+    assert window.jingle_volumes == [-3] * 49 + [7]
+    assert window.jingle_colors[49] == "#abcdef"
+    assert window.last_folder == context.initial["last_folder"]
     assert window.jingle_tiles[0].jingle_text == "Imported"
     assert window.volume_slider.value() == 42 and window.volume_value_label.text() == "42 %"
     assert (window.width(), window.height()) == old_size
@@ -264,6 +268,8 @@ def test_real_import_reload_close_and_hidden_slots(context, tmp_path, monkeypatc
     assert disk["buttons"]["texts"][49] == "Hidden Unicode 音楽"
     assert Path(disk["buttons"]["paths"][49]).is_relative_to(context.active.parent / "library")
     assert disk["volume"] == 42
+    assert disk["last_folder"] == context.initial["last_folder"]
+    assert disk["buttons"]["volumes"][49] == 7
     assert Path(calls[0][0].preparation_directory).exists()  # Retain; no public cleanup API.
 
 
@@ -572,3 +578,30 @@ def test_source_removed_after_preflight_is_not_silently_omitted(context, tmp_pat
     assert not destination.exists()
     assert gui.jingleplayer_logic.jingle_paths[49] == str(source)
     assert context.messages[-1][0] == "critical"
+
+
+def test_missing_and_unreadable_assignments_together_block_omission(context, tmp_path, monkeypatch):
+    missing = tmp_path / "missing.wav"
+    unreadable = tmp_path / "unreadable.wav"
+    unreadable.write_bytes(b"audio")
+    gui.jingleplayer_logic.jingle_paths[0] = str(missing)
+    gui.jingleplayer_logic.jingle_paths[49] = str(unreadable)
+    before = gui.jingleplayer_logic.get_current_settings()
+    active_bytes = context.active.read_bytes()
+    select_export(monkeypatch, tmp_path / "new")
+    real_open = gui.os.open
+
+    def denied(path, *args, **kwargs):
+        if Path(path) == unreadable:
+            raise PermissionError("explicit access denial")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(gui.os, "open", denied)
+    monkeypatch.setattr(context.window, "_confirm_missing_export", lambda *a: pytest.fail("blocked file present"))
+    monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: pytest.fail("must not export"))
+    context.window._export_soundboard()
+    drain(context)
+    assert context.messages[-1][0] == "critical"
+    assert str(missing) in context.messages[-1][2] and str(unreadable) in context.messages[-1][2]
+    assert gui.jingleplayer_logic.get_current_settings() == before
+    assert context.active.read_bytes() == active_bytes

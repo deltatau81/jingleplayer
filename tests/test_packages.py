@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -1279,6 +1280,75 @@ def test_activate_detects_concurrent_settings_change(tmp_path, monkeypatch):
     assert caught.value.outcome == "not_committed"
     assert args[1].read_bytes() == concurrent
     assert caught.value.installed_directory in caught.value.retained_paths
+
+
+def test_activated_settings_survive_fresh_process_without_source_package(tmp_path):
+    args = activation_fixture(tmp_path)
+    result = activate(args)
+    args[0].source_directory.rename(tmp_path / "source-moved")
+    args[0].preparation_directory.rename(tmp_path / "preparation-moved")
+    script = """
+import json, sys
+from pathlib import Path
+import jingleplayer_logic as logic
+logic.settings_file = Path(sys.argv[1])
+logic.initialize_settings()
+print(json.dumps(logic.get_current_settings(), ensure_ascii=True))
+"""
+    environment = os.environ.copy()
+    environment.update(SDL_AUDIODRIVER="dummy", SDL_VIDEODRIVER="dummy",
+                       HOME=str(tmp_path / "fake-home"), USERPROFILE=str(tmp_path / "fake-home"),
+                       PYTHONPATH=str(Path(packages.__file__).parent), PYTHONDONTWRITEBYTECODE="1")
+    before = args[1].read_bytes()
+    child = subprocess.run([sys.executable, "-c", script, str(args[1])], cwd=tmp_path,
+                           env=environment, capture_output=True, text=True, timeout=30)
+    assert child.returncode == 0, child.stderr
+    loaded = json.loads(child.stdout.splitlines()[-1])
+    assert loaded == result.settings
+    assert loaded["window_size"] == [1234, 777] and loaded["volume"] == 37
+    assert loaded["last_folder"] == str(tmp_path / "local audio")
+    assert len(loaded["buttons"]["paths"]) == 50
+    assert loaded["buttons"]["paths"][0] == loaded["buttons"]["paths"][49]
+    assert all(not path or Path(path).is_file() for path in loaded["buttons"]["paths"])
+    assert args[1].read_bytes() == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX backslash is a literal filename character")
+def test_posix_literal_backslash_source_is_renamed_not_reinterpreted(tmp_path):
+    source = tmp_path / r"C:\Windows-looking.wav"
+    source.write_bytes(b"audio")
+    snapshot = board()
+    snapshot["buttons"]["paths"][49] = str(source)
+    destination = tmp_path / "exported"
+    result = packages.export_package_directory(snapshot, destination)
+    assert result.assets[0].path == "Musik/asset-001.wav"
+    assert (destination / result.assets[0].path).read_bytes() == b"audio"
+
+
+def test_unicode_metadata_spelling_must_match_actual_directory_entries(tmp_path):
+    manifest, snapshot = data(("Musik/é.wav",))
+    root = write_package(tmp_path / "package", manifest, snapshot)
+    composed = root / "Musik/é.wav"
+    decomposed = root / "Musik/e\u0301.wav"
+    if decomposed.exists():
+        pytest.skip("filesystem aliases NFC/NFD spellings; exact-spelling mismatch cannot be constructed")
+    composed.rename(decomposed)
+    with pytest.raises(packages.PackageValidationError):
+        packages.validate_package_directory(root)
+
+
+def test_retained_preparation_ownership_cleanup_refuses_link_escape(tmp_path):
+    root = tmp_path / "owned"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "keep.wav"
+    sentinel.write_bytes(b"unrelated")
+    owner = packages._directory_identity(root)
+    symlink_or_skip(root / "Musik", outside, True)
+    with pytest.raises(packages.PackageValidationError):
+        packages._cleanup_preparation(root, owner, {})
+    assert sentinel.read_bytes() == b"unrelated"
 
 
 @pytest.mark.parametrize("changed_after", [False, True])

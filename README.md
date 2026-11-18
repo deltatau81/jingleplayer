@@ -1,6 +1,6 @@
 # Jingleplayer
 
-Jingleplayer is a Windows desktop soundboard and jingle player built with Python, PySide6, and pygame. It provides configurable jingle buttons across up to 50 persistent slots, simultaneous playback, individual jingle volume, fadeout, and persistent settings.
+Jingleplayer is a desktop soundboard and jingle player built with Python, PySide6, and pygame. It provides configurable jingle buttons across up to 50 persistent slots, simultaneous playback, individual jingle volume, fadeout, and persistent settings. This feature branch adds macOS build support and portable directory soundboards; native macOS release validation remains a separate requirement.
 
 ## Project structure
 
@@ -8,6 +8,8 @@ Jingleplayer is a Windows desktop soundboard and jingle player built with Python
 - `jingleplayer_gui_pyside6.py` – production PySide6 interface
 - `jingleplayer_gui_tkinter.py` – legacy/fallback interface
 - `jingleplayer_logic.py` – shared audio and settings logic
+- `jingleplayer_packages.py` – portable directory package validation, export, preparation and disk activation
+- `PORTABLE_SOUNDBOARDS.md` – German export/import, recovery and validation guide
 - `HELP.md` – German user manual bundled with the application
 - `AUDIO_ENGINE.md` – technical audio-engine documentation
 - `build_windows.ps1` – authoritative Windows build procedure
@@ -104,6 +106,14 @@ Corrupt or structurally invalid settings are not overwritten. Unsupported future
 
 No fallback settings directory is used.
 
+## Portable Soundboards
+
+Im Menü **Soundboard** stehen **Soundboard exportieren...** und **Soundboard importieren...** bereit. Export: vorhandenen Ziel-Elternordner auswählen, neuen Paketnamen eingeben und gegebenenfalls fehlende Audiozuweisungen ausdrücklich nur für den Export leeren. Alle 50 Plätze einschließlich ausgeblendeter Tasten werden berücksichtigt.
+
+Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. ZIP-Import, mehrere Presets und Jingle-Pools sind nicht implementiert.
+
+Anleitung, Paketformat, Grenzen bei parallelen Schreibzugriffen und sichere manuelle Wiederherstellung: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). Import ersetzt das aktuelle Soundboard; die Kopie ist keine Garantie für vollständige Ausfallsicherheit.
+
 ## Requirements
 
 Runtime dependencies include PySide6 and pygame:
@@ -135,6 +145,8 @@ python -m pytest -q
 ```
 
 The suite covers audio logic, settings persistence and migration, volume behavior, the PySide6 interface, and the product/build entry points. The real audio smoke test remains a separate interactive Windows test.
+
+The automatic test workflow is configured for Ubuntu and Windows with Python 3.11/3.13, plus macOS with Python 3.11. It uses offscreen Qt and dummy SDL drivers; real audio hardware is not tested. The separate manually dispatched macOS workflow retains its native arm64/x86_64 builds and artifact names. Workflow configuration alone does not establish a successful CI run. See the [validation checklist](PORTABLE_SOUNDBOARDS.md#validierung-und-freigabe) for native manual checks and platform-specific skips.
 
 ## Windows build
 

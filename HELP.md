@@ -118,6 +118,68 @@ Eine beschädigte oder strukturell ungültige Settingsdatei wird nicht automatis
 
 Auch Fehler beim späteren Speichern werden in einem Fehlerdialog angezeigt.
 
+## Portable Soundboards exportieren und importieren
+
+Diese Funktionen befinden sich im Menü **Soundboard** der PySide6-Oberfläche.
+Ein Paket enthält die Konfiguration und die referenzierten Audiodateien:
+
+```text
+MeinSoundboard/
+  jingleplayer_package.json
+  jingleplayer_settings.json
+  Musik/
+    asset-001.mp3
+    asset-002.wav
+```
+
+### Export
+
+**Soundboard exportieren...** wählen, einen vorhandenen Elternordner auswählen
+und einen neuen Paketnamen eingeben. Vorhandene Ziele werden nicht überschrieben.
+Alle **50 Tastenplätze einschließlich ausgeblendeter Belegungen** werden geprüft.
+Bei relativen Audiozuweisungen den ausdrücklich abgefragten Basisordner auswählen.
+
+Fehlende Dateien werden mit Tastennummer, Beschriftung und Pfad angezeigt. Sie
+können abbrechen oder **Ohne fehlende Dateien exportieren** wählen. Nur die
+Exportkopie verliert dann diese Audiozuweisungen; aktuelle Settings und Originalaudio
+bleiben unverändert. Unlesbare Dateien oder unsichere Pfade werden nicht still
+übersprungen. Zum Neuzuweisen abbrechen und die Tasteneinstellungen verwenden.
+
+### Import
+
+**Soundboard importieren...** wählen und den vollständigen Paketordner auswählen.
+Nach der Prüfung zeigt die Vorschau Datei- und Tastenzahl. Erst die Bestätigung
+autorisiert das Ersetzen aller Belegungen. Vor der Aktivierung wird die Wiedergabe
+gestoppt. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben
+erhalten. Die aktive Settingsdatei muss bereits existieren.
+
+Audiodaten werden in einen eigenen Ordner unter `~/.jingleplayer/library/` kopiert;
+der ursprüngliche Paketordner wird danach nicht zur Wiedergabe benötigt. Paketpfade
+verwenden `/` unter `Musik/`; installierte Zuweisungen sind native absolute Pfade.
+ZIP-Pakete, mehrere Presets und Jingle-Pools sind nicht implementiert.
+
+### Fehler und Wiederherstellung
+
+Vor dem Settingswechsel entsteht eine separate Kopie unter
+`~/.jingleplayer/import-recovery/import-<uuid>/`. Die dortige
+`jingleplayer_settings.json` enthält die ursprünglichen Bytes; `recovery.json`
+nennt unter anderem ursprünglichen Settingspfad, Größe und SHA-256. Das bestehende
+Pre-PySide6-Migrationsbackup wird nicht überschrieben. Erfolgreiche Vorbereitungen
+und unsichere Restdaten können erhalten bleiben; die Meldung nennt ihre Pfade.
+
+Bei **unklarem Importstatus** oder **aktiviert, aber Oberfläche nicht neu geladen**
+bleibt Speichern gesperrt. Schließen Sie Jingleplayer und prüfen Sie zuerst den
+Datenträgerstand; es erfolgt kein automatisches Restore. Andere Instanzen können
+Settings parallel verändern; die Fingerprintprüfung beseitigt nicht jedes
+Zeitfenster. Es gibt keine garantierte Crash-Durabilität.
+
+Manuelles Restore: alle Instanzen schließen, aktuelle Settings und Librarydaten
+separat sichern, Größe/Hash der Recoverydatei gegen die Metadaten prüfen und den
+aktiven Settingspfad unabhängig bestätigen. Nur nach ausdrücklicher Entscheidung
+die geprüfte Kopie dorthin zurückkopieren und neu starten. Die Recovery enthält
+keine Sicherung alter externer Audiodateien; deren Pfade müssen weiter erreichbar
+sein. Library-, Recovery- und Vorbereitungsordner nicht ungeprüft löschen.
+
 ## Fenstergröße und Beenden
 
 Die gespeicherte Fenstergröße wird beim nächsten Start wiederhergestellt. Eine geänderte Fenstergröße wird beim Schließen gespeichert; bei unveränderter Größe ist kein zusätzlicher Speichervorgang nötig.

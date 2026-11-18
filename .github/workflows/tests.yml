@@ -6,11 +6,18 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.13"]
+        include:
+          - {os: ubuntu-latest, python-version: "3.11"}
+          - {os: ubuntu-latest, python-version: "3.13"}
+          - {os: windows-latest, python-version: "3.11"}
+          - {os: windows-latest, python-version: "3.13"}
+          # Native macOS builds remain in the manually dispatched macos.yml.
+          - {os: macos-15, python-version: "3.11"}
 
     env:
       SDL_AUDIODRIVER: dummy
@@ -28,6 +35,7 @@ jobs:
           cache: pip
 
       - name: Install Qt runtime dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libegl1
@@ -39,4 +47,4 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Run unit tests
-        run: python -m pytest -q
+        run: python -m pytest -q -ra --basetemp="${{ runner.temp }}/jingleplayer-pytest" -p no:cacheprovider
