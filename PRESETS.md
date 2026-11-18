@@ -86,7 +86,64 @@ Import bietet **Als neues Preset** (neue UUID, eindeutiger vom Benutzer gewählt
 
 Vor dem Import werden aktuelle bestätigte Änderungen gesichert und das aktuelle Persistenztoken festgehalten. Spätere konkurrierende Saves führen zum Konflikt. Der Import sichert die kompletten vorherigen Settingsbytes unter `import-recovery/import-<uuid>/` und prüft Recovery und installierte Assets noch unmittelbar vor dem Settingscommit unter der Sperre. Bei Fehlern vor Commit bleibt das Dokument unverändert; unsichere/neue Assets und Recoverydaten werden nicht blind gelöscht oder automatisch zurückgespielt. Die GUI lädt nach bestätigtem Commit Dokument und aktive Projektion neu.
 
-Details zur Wiederherstellung und zu verbleibenden Vorbereitungspfaden: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). ZIP und Jingle-Pools sind weiterhin nicht implementiert.
+Details zur Wiederherstellung und zu verbleibenden Vorbereitungspfaden: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). ZIP und portable Mehrdatei-Pools sind noch nicht implementiert.
+
+## Audio-Pools (Phase 18C)
+
+Schema 3 erhält ein optionales `audio_pools`-Objekt direkt im Preset. Schlüssel
+sind die 1-basierten Slotnummern als Strings (`"1"` bis `"50"`, auch verborgen).
+Alte Dokumente ohne das Feld bleiben unverändert gültig und erhalten keine Defaults.
+
+```json
+"audio_pools": {
+  "1": {
+    "audio_pool": ["C:/Jingles/intro.wav", "C:/Jingles/outro.mp3"],
+    "audio_pool_mode": "manual",
+    "selected_audio": "C:/Jingles/outro.mp3"
+  }
+}
+```
+
+`buttons.paths[0]` muss hier exakt `C:/Jingles/intro.wav` entsprechen. Dieser
+Kompatibilitätspfad ist immer der erste Eintrag und kein zweiter Audioquellentyp.
+Bei vorhandenem Pool bestimmt ausschließlich dieser die Auswahl. Ohne Pool gilt
+unverändert der Einzeldateipfad. Leere aktive Pools, identische Pfadstrings,
+unbekannte Felder/Modi, falsche Typen, NUL/Surrogate und Nicht-MP3/WAV-Einträge werden
+abgewiesen. Dateiexistenz gehört nicht zur Modellvalidierung: Datenträger können
+vorübergehend fehlen. Pfadstrings bleiben unverändert; Dateisystem-Aliase werden
+nicht in der reinen Modellvalidierung aufgelöst oder dedupliziert.
+
+Die manuelle Auswahl ist ein Pfad im Pool, kein ungeschützter Index. Beim Entfernen
+des markierten Eintrags wählt der Dialog den nächsten, am Ende den vorherigen.
+Leeren und Speichern entfernt den Pool und den Audio-Slotpfad; Abbrechen verwirft
+den gesamten Entwurf. Änderungen werden vor jeder Laufzeitänderung vollständig
+validiert und über die bestehende atomare Speicherung mit Fingerprint, Sperre und
+Backups geschrieben. Unklare Speicherergebnisse behalten die vorhandene
+Schreibsperre bei. Duplizieren kopiert Pools tief; Erstellen erzeugt keine Pools.
+Umbenennen und Löschen ändern keine externen Audiodateien.
+
+Sequenzindex und letzte Zufallsauswahl leben ausschließlich im RAM, getrennt nach
+Preset-ID und Slot. Nur ein erfolgreicher Start schreibt sie fort. Preset-Wechsel,
+Neustart und Änderungen am Pool setzen sie zurück; reine GUI-Neuaufbauten nicht.
+Manuelle Auswahl wird dauerhaft gespeichert. Relative Poolpfade werden ausdrücklich
+gegen den Settingsordner aufgelöst, niemals gegen das Arbeitsverzeichnis. Bisherige
+Einzeldateien behalten ihre bisherigen Pfadregeln. Absolute fremde Windows-Pfade
+werden auf POSIX nicht als relative Pfade interpretiert.
+
+Die Auswahl ist von pygame getrennt; gestartete Dateien verwenden den vorhandenen
+Soundcache, Kanal-/Endeventpfad und Lautstärken. Stoppen, Fadeout und natürliches
+Ende wählen keine neue Datei. Automatische Modi versuchen pro Start jeden
+Pool-Eintrag höchstens einmal, manuell ausschließlich den ausgewählten Eintrag.
+Die Dateiliste prüft Erreichbarkeit im Qt-Threadpool, ohne Audio zu laden; laufende
+Dateisystemabfragen sind nicht abbrechbar und ihre Anzeige kann zwischenzeitlich
+veralten. Die tatsächliche Wiedergabeprüfung ist weiterhin synchron wie bisher.
+
+Das portable Format bleibt unverändert: Mehrdatei-Pools werden vor dem Export
+abgewiesen, auch in versteckten Slots. Ein-Datei-Pools können als
+Einzeldatei-Audiozuordnung exportiert werden; Poolmodus-Metadaten enthält das alte
+Paketformat nicht. Import enthält keine Pools und entfernt sie nur aus dem explizit
+ersetzten Preset. Andere Presets und die vollständigen Recoverybytes bleiben
+erhalten. Phase 18D erweitert erst die portable Pooldarstellung.
 
 ## Validierung
 

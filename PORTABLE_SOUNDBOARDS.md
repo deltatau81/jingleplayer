@@ -86,7 +86,13 @@ Grenzen: je JSON-Datei 1 MiB, höchstens 50 Assets, 1 GiB pro Asset und insgesam
 begrenzt. Unbekannte Paket-/Settingsfelder werden abgelehnt; `last_folder` ist im
 Paket nur leer oder abwesend zulässig und wird vom Export entfernt. Fremde Dateien
 im Paketordner, etwa nachträglich eingefügte Finder-Metadaten, können die Prüfung
-blockieren. ZIP-Pakete und Jingle-Pools werden nicht unterstützt; lokale Presets verwenden unabhängig davon Schema 3.
+blockieren. ZIP-Pakete und portable Mehrdatei-Pools werden noch nicht unterstützt;
+lokale Schema-3-Presets unterstützen Audio-Pools. Enthält das aktive Preset einen
+Pool mit mehreren Dateien, wird der Export vor der Ordnerauswahl blockiert, auch
+bei ausgeblendeten Slots. Kein Teil-Export: Die vollständige Mitnahme folgt in
+Phase 18D. Ein-Datei-Pools werden als einzelne Audiozuordnung exportiert. Import
+bisheriger Pakete enthält keine Pools und entfernt nur die Poolzuordnungen des
+ausdrücklich ersetzten Presets; andere Presets bleiben erhalten.
 
 ## Importieren
 

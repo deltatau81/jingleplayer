@@ -120,6 +120,41 @@ No fallback settings directory is used.
 
 ## Portable Soundboards
 
+### Audio-Pools pro Button (Phase 18C)
+
+Rechtsklick auf einen Button öffnet **Jingle bearbeiten**. Unter **Audioquelle /
+Pool** zwischen **Einzeldatei** und **Audio-Pool** wählen. **Hinzufügen…** nimmt
+mehrere MP3/WAV-Dateien auf; **Entfernen**, **Leeren**, **Nach oben** und **Nach
+unten** bearbeiten nur den Entwurf. **Speichern** übernimmt alles atomar,
+**Abbrechen** verwirft es. Leeren und Speichern entfernt die Audiozuordnung,
+aber niemals Audiodateien. Die Liste zeigt vollständige Pfade und markiert
+fehlende/nicht erreichbare Dateien nach einer Hintergrundprüfung.
+
+- **Sequenziell:** Pro erfolgreichem Start eine Datei weiter, nach der letzten
+  wieder die erste. Stoppen und natürliches Ende starten keine weitere Datei.
+- **Zufällig:** Keine direkte Wiederholung, solange eine andere Datei abspielbar
+  ist. Fehlgeschlagene Starts ändern die letzte erfolgreiche Auswahl nicht.
+- **Manuell:** Im Dialog die gewünschte Datei markieren oder die kompakte
+  Dateiauswahl direkt auf der Kachel verwenden. Auswahl allein startet nichts;
+  Linksklick startet/stoppt wie bisher. Die Auswahl bleibt nach Neustart erhalten.
+
+Automatische Modi überspringen fehlende und nicht ladbare Dateien; die Statuszeile
+nennt übersprungene Einträge. Sind alle unbrauchbar, erscheint ein Fehler. Manuell
+wird eine nicht abspielbare Auswahl niemals still ersetzt. Konfigurationen und
+Dateipfade bleiben dabei gespeichert. Änderungen wirken beim nächsten Start;
+bereits laufende Sounds werden durch Dateiauswahl oder Poolbearbeitung nicht ersetzt.
+
+Pools gehören zum Preset und werden vollständig dupliziert. Neue Presets haben
+keine Pools; Löschen entfernt keine Audiodateien. Sequenz- und Zufallszustände sind
+nur Laufzeitdaten und werden bei Preset-Wechsel, Neustart oder Pooländerung
+zurückgesetzt. Hintergrundbilder, Farben, Lautstärken und alle 50 Slots bleiben erhalten.
+
+**Portable Pakete:** Mehrdatei-Pools blockieren den Export, auch in ausgeblendeten
+Slots. Es gibt keinen Teil-Export. Einzeldateien und Ein-Datei-Pools bleiben im
+bisherigen Paketformat exportierbar. Alte Pakete bleiben importierbar; beim Ersetzen
+entfallen nur die Pools des ersetzten Presets. Vollständige Poolpakete folgen in
+Phase 18D. ZIP wird weiterhin nicht unterstützt.
+
 ### Hintergrundbild pro Preset
 
 Im Menü **Presets → Hintergrundbild auswählen…** ein PNG/JPEG auswählen. Das Bild
@@ -147,7 +182,7 @@ unverändert. Die portable Bildmitnahme ist für Phase 18D vorgesehen.
 
 Im Menü **Soundboard** stehen **Soundboard exportieren...** und **Soundboard importieren...** bereit. Export: vorhandenen Ziel-Elternordner auswählen, neuen Paketnamen eingeben und gegebenenfalls fehlende Audiozuweisungen ausdrücklich nur für den Export leeren. Alle 50 Plätze einschließlich ausgeblendeter Tasten werden berücksichtigt.
 
-Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. Der Import kann ein neues Preset hinzufügen oder nach ausdrücklicher Auswahl nur das aktive ersetzen. Exportiert wird ausschließlich das aktive Preset; ZIP und Jingle-Pools bleiben nicht implementiert.
+Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. Der Import kann ein neues Preset hinzufügen oder nach ausdrücklicher Auswahl nur das aktive ersetzen. Exportiert wird ausschließlich das aktive Preset; ZIP und portable Mehrdatei-Pools werden noch nicht unterstützt.
 
 Anleitung, Paketformat, Grenzen bei parallelen Schreibzugriffen und sichere manuelle Wiederherstellung: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). Import bewahrt die übrigen Presets; die Kopie ist keine Garantie für vollständige Ausfallsicherheit.
 

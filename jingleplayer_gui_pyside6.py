@@ -8,7 +8,7 @@ import unicodedata
 from pathlib import Path
 from uuid import UUID
 
-from PySide6.QtCore import QRectF, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QRectF, QThread, QTimer, Qt, Signal, QObject, QRunnable, QThreadPool, Slot
 from PySide6.QtGui import QAction, QColor, QIcon, QImageReader, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QInputDialog,
     QMessageBox,
@@ -39,6 +40,128 @@ from PySide6.QtWidgets import (
 
 import jingleplayer_logic
 import jingleplayer_packages
+from jingleplayer_audio_pools import validate_pool, pool_file_path
+
+
+class _ProbeSignals(QObject):
+    finished = Signal(list)
+
+
+class _PoolFileProbe(QRunnable):
+    """Metadata checks off the GUI thread; never load audio or modify files."""
+
+    def __init__(self, paths, base):
+        super().__init__()
+        self.paths, self.base = paths, base
+        self.signals = _ProbeSignals()
+
+    def run(self):
+        results = []
+        for raw in self.paths:
+            try:
+                path = pool_file_path(raw, self.base)
+                status = "" if path.is_file() else " [fehlt / nicht erreichbar]"
+            except (OSError, ValueError):
+                status = " [nicht erreichbar]"
+            results.append((raw, status))
+        self.signals.finished.emit(results)
+
+
+class AudioPoolEditor(QWidget):
+    """Draft-only pool configuration embedded in the existing button dialog."""
+
+    def __init__(self, path, parent=None):
+        super().__init__(parent)
+        self.source_type = QComboBox(self)
+        self.source_type.addItems(["Einzeldatei", "Audio-Pool"])
+        self.mode = QComboBox(self)
+        for label, value in (("Sequenziell", "sequential"), ("Zufällig", "random"), ("Manuell", "manual")):
+            self.mode.addItem(label, value)
+        self.files = QListWidget(self)
+        self.files.setAccessibleName("Pooldateien; markierter Eintrag ist die manuelle Auswahl")
+        self.files.setMinimumHeight(140)
+        self.files.setToolTip("Die markierte Datei ist die gespeicherte manuelle Auswahl. Vollständige Pfade unterscheiden gleiche Namen.")
+        self.body = QWidget(self)
+        body = QVBoxLayout(self.body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.addWidget(self.mode)
+        body.addWidget(self.files)
+        controls = QHBoxLayout()
+        for title, callback in (("Hinzufügen…", self.add_files), ("Entfernen", self.remove_file),
+                                ("Leeren", self.clear_files), ("Nach oben", lambda: self.move_file(-1)),
+                                ("Nach unten", lambda: self.move_file(1))):
+            button = QPushButton(title, self.body)
+            button.clicked.connect(callback)
+            controls.addWidget(button)
+        body.addLayout(controls)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.source_type)
+        layout.addWidget(self.body)
+        self.source_type.currentIndexChanged.connect(lambda index: self.body.setEnabled(index == 1))
+        self.configure(None, path)
+
+    def paths(self):
+        return [self.files.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.files.count())]
+
+    def configure(self, pool, path=""):
+        self.files.clear()
+        for raw in pool["audio_pool"] if pool else ([path] if path else []):
+            self.files.addItem(raw)
+            self.files.item(self.files.count() - 1).setData(Qt.ItemDataRole.UserRole, raw)
+        self.mode.setCurrentIndex(self.mode.findData(pool["audio_pool_mode"] if pool else "sequential"))
+        self.files.setCurrentRow(pool["audio_pool"].index(pool["selected_audio"]) if pool else 0)
+        self.source_type.setCurrentIndex(1 if pool else 0)
+        self.body.setEnabled(bool(pool))
+        self.probe()
+
+    def probe(self):
+        task = _PoolFileProbe(self.paths(), Path(jingleplayer_logic.settings_file).parent)
+        task.signals.finished.connect(self._probe_results, Qt.ConnectionType.QueuedConnection)
+        QThreadPool.globalInstance().start(task)
+
+    @Slot(list)
+    def _probe_results(self, results):
+        statuses = dict(results)
+        for i, raw in enumerate(self.paths()):
+            if raw in statuses:
+                self.files.item(i).setText(raw + statuses[raw])
+
+    def add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Pooldateien hinzufügen", "", "Audiodateien (*.mp3 *.wav)")
+        for raw in paths:
+            if raw not in self.paths():
+                self.files.addItem(raw)
+                self.files.item(self.files.count() - 1).setData(Qt.ItemDataRole.UserRole, raw)
+        if self.files.currentRow() < 0:
+            self.files.setCurrentRow(0)
+        self.probe()
+
+    def remove_file(self):
+        row = self.files.currentRow()
+        if row >= 0:
+            self.files.takeItem(row)
+            self.files.setCurrentRow(min(row, self.files.count() - 1))
+
+    def clear_files(self):
+        self.files.clear()  # Draft only; Cancel restores the entire original configuration.
+
+    def move_file(self, delta):
+        row = self.files.currentRow()
+        if 0 <= row + delta < self.files.count():
+            item = self.files.takeItem(row)
+            self.files.insertItem(row + delta, item)
+            self.files.setCurrentRow(row + delta)
+
+    def value(self):
+        if self.source_type.currentIndex() == 0:
+            return None
+        paths = self.paths()
+        if not paths:
+            return None  # Explicitly clearing the draft removes the assignment on Save.
+        selected = self.files.currentRow()
+        return validate_pool({"audio_pool": paths, "audio_pool_mode": self.mode.currentData(),
+                              "selected_audio": paths[selected] if 0 <= selected < len(paths) else ""})
 
 MAX_FADEOUT_DURATION_MS = 2_147_483_647
 MIN_BUTTON_HEIGHT = 1
@@ -286,6 +409,11 @@ class JingleEditDialog(QDialog):
         path_layout.addWidget(self.path_edit, 1)
         path_layout.addWidget(self.browse_button)
         form_layout.addRow("Audiodatei", path_widget)
+        self.pool_editor = AudioPoolEditor(str(path), self)
+        form_layout.addRow("Audioquelle / Pool", self.pool_editor)
+        self.pool_editor.source_type.currentIndexChanged.connect(
+            lambda index: (self.path_edit.setEnabled(index == 0), self.browse_button.setEnabled(index == 0)))
+        self.setMinimumSize(700, 530)
 
         self.color_button = QPushButton(self.color_value, self)
         self.color_button.clicked.connect(self._choose_color)
@@ -325,6 +453,14 @@ class JingleEditDialog(QDialog):
             self.path_edit.setText(selected_path)
             self.selected_folder = str(Path(selected_path).parent)
 
+    def accept(self):
+        try:
+            self.pool_editor.value()
+        except ValueError as error:
+            QMessageBox.warning(self, "Ungültiger Audio-Pool", str(error))
+            return
+        super().accept()
+
     def _choose_color(self):
         initial_color = QColor(self.color_value)
         selected_color = QColorDialog.getColor(initial_color, self, "Jingle-Farbe auswählen")
@@ -346,9 +482,11 @@ class JingleEditDialog(QDialog):
         return {
             "text": self.name_edit.text(),
             "color": self.color_value,
-            "path": self.path_edit.text(),
+            "path": ("" if self.pool_editor.source_type.currentIndex() == 1 and not self.pool_editor.paths()
+                     else self.path_edit.text()),
             "volume_db": self.volume_spin.value(),
             "selected_folder": self.selected_folder,
+            "pool": self.pool_editor.value(),
         }
 
 
@@ -712,9 +850,17 @@ class JingleplayerMainWindow(QMainWindow):
         if not self._begin_package_operation():
             return
         try:
+            document = jingleplayer_logic.get_preset_settings()
+            active = document["presets"][jingleplayer_logic.presets._preset_index(document, document["active_preset_id"])]
+            if any(len(pool["audio_pool"]) > 1 for pool in active.get("audio_pools", {}).values()):
+                QMessageBox.warning(self, "Audio-Pool nicht exportierbar",
+                                    "Das aktuelle Paketformat enthält keine Audio-Pools. Export abgebrochen; "
+                                    "vollständige Poolpakete sind für Phase 18D vorgesehen.")
+                self._finish_package_operation()
+                return
             # Accepted edits already update runtime, even if their save failed.
             # Modal editors must be saved/closed before invoking this operation.
-            snapshot = jingleplayer_logic.get_current_settings()
+            snapshot = jingleplayer_logic.presets.extract_export_board(document)
             snapshot["window_size"] = [self.width(), self.height()]
             parent = QFileDialog.getExistingDirectory(self, "Übergeordneten Ordner für den Export auswählen")
             if not parent:
@@ -1123,6 +1269,7 @@ class JingleplayerMainWindow(QMainWindow):
                 tile.set_playing(next_index + 1 in playing_indices)
                 tile.clicked.connect(self._handle_tile_click)
                 tile.edit_requested.connect(self._open_jingle_editor)
+                self._configure_manual_pool(tile, next_index + 1)
                 row_layout.addWidget(tile, 1)
                 self.jingle_tiles.append(tile)
                 next_index += 1
@@ -1145,9 +1292,11 @@ class JingleplayerMainWindow(QMainWindow):
             return
 
         jingle_path = self.jingle_paths[index - 1] if index <= len(self.jingle_paths) else ""
-        result = jingleplayer_logic.play_jingle(index, jingle_path, self.fadeout_duration)
+        result = jingleplayer_logic.play_button(index, jingle_path, self.fadeout_duration)
         if result and result.get("success") is True:
             tile.set_playing(True)
+            if result.get("warnings"):
+                self.statusBar().showMessage("Pooldateien übersprungen: " + "; ".join(result["warnings"]), 15000)
         elif result and result.get("error"):
             tile.set_playing(False)
             QMessageBox.critical(
@@ -1155,6 +1304,90 @@ class JingleplayerMainWindow(QMainWindow):
                 "Jingle konnte nicht abgespielt werden",
                 result["error"],
             )
+
+    def _configure_manual_pool(self, tile, index):
+        old = getattr(tile, "pool_combo", None)
+        if old is not None:
+            tile.layout().removeWidget(old)
+            old.hide()
+            old.deleteLater()
+            tile.pool_combo = None
+        pool = jingleplayer_logic.get_active_audio_pool(index)
+        if pool is None:
+            tile.setToolTip("")
+            return
+        tile.setToolTip(f"Audio-Pool: {len(pool['audio_pool'])} Dateien ({pool['audio_pool_mode']})")
+        if pool["audio_pool_mode"] != "manual":
+            return
+        combo = QComboBox(tile)
+        combo.setAccessibleName(f"Manuelle Datei für Button {index}")
+        combo.setMinimumContentsLength(6)
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        combo.setStyleSheet("QComboBox { color: white; background-color: rgba(15, 18, 22, 90); }"
+                           "QComboBox QAbstractItemView { color: white; background-color: #20252b; }")
+        for raw in pool["audio_pool"]:
+            combo.addItem(raw, raw)  # Full paths keep duplicate basenames distinguishable.
+            combo.setItemData(combo.count() - 1, raw, Qt.ItemDataRole.ToolTipRole)
+        combo.setCurrentIndex(pool["audio_pool"].index(pool["selected_audio"]))
+        combo.setToolTip(pool["selected_audio"])
+        combo.currentIndexChanged.connect(lambda row: self._select_manual_pool(index, combo, row))
+        tile.layout().addWidget(combo)
+        tile.pool_combo = combo
+
+    def _select_manual_pool(self, index, combo, row):
+        pool = jingleplayer_logic.get_active_audio_pool(index)
+        if pool is None:
+            return
+        before = pool["selected_audio"]
+        path = combo.itemData(row)
+        saved = False
+        if not self._package_busy and not self._settings_writes_blocked and path in pool["audio_pool"]:
+            document = jingleplayer_logic.get_preset_settings()
+            active = document["presets"][jingleplayer_logic.presets._preset_index(document, document["active_preset_id"])]
+            active["audio_pools"][str(index)]["selected_audio"] = path
+            saved = self._save_settings_with_feedback(document, "Manuelle Auswahl konnte nicht gespeichert werden")
+        if saved:
+            combo.setToolTip(path)
+        else:
+            blocked = combo.blockSignals(True)
+            combo.setCurrentIndex(pool["audio_pool"].index(before))
+            combo.blockSignals(blocked)
+
+    def _save_pool_editor(self, index, values):
+        """Validate/save the complete draft before changing runtime or the tile."""
+        try:
+            old_pool = jingleplayer_logic.get_active_audio_pool(index)
+            document = jingleplayer_logic.get_preset_settings()
+            active = document["presets"][jingleplayer_logic.presets._preset_index(document, document["active_preset_id"])]
+            buttons = active["buttons"]
+            pool = validate_pool(values["pool"]) if values["pool"] is not None else None
+            buttons["texts"][index - 1] = values["text"]
+            buttons["colors"][index - 1] = values["color"]
+            buttons["volumes"][index - 1] = values["volume_db"]
+            buttons["paths"][index - 1] = pool["audio_pool"][0] if pool else values["path"]
+            if pool is not None:
+                active.setdefault("audio_pools", {})[str(index)] = pool
+            else:
+                active.get("audio_pools", {}).pop(str(index), None)
+                if not active.get("audio_pools"):
+                    active.pop("audio_pools", None)
+            if values["selected_folder"] is not None:
+                document["last_folder"] = values["selected_folder"]
+            if not self._save_settings_with_feedback(document, "Jingle konnte nicht gespeichert werden"):
+                return
+            if old_pool != pool:
+                jingleplayer_logic._pool_selector.states.pop((document["active_preset_id"], index), None)
+            jingleplayer_logic._apply_document(document)
+            jingleplayer_logic.set_button_volume(index, values["volume_db"])
+            self.jingle_texts, self.jingle_colors = buttons["texts"][:], buttons["colors"][:]
+            self.jingle_paths, self.jingle_volumes = buttons["paths"][:], buttons["volumes"][:]
+            self.last_folder = document["last_folder"]
+            tile = self.jingle_tiles[index - 1]
+            tile.update_content(values["text"], values["color"])
+            self._configure_manual_pool(tile, index)
+        except (ValueError, OSError) as error:
+            QMessageBox.critical(self, "Ungültiger Audio-Pool", str(error))
 
     def _open_jingle_editor(self, index):
         if self._package_busy or self._restart_required:
@@ -1168,10 +1401,15 @@ class JingleplayerMainWindow(QMainWindow):
             self.last_folder,
             self,
         )
+        if hasattr(dialog, "pool_editor"):
+            dialog.pool_editor.configure(jingleplayer_logic.get_active_audio_pool(index), self.jingle_paths[list_index])
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         values = dialog.get_values()
+        if "pool" in values:
+            self._save_pool_editor(index, values)
+            return
         current_settings = jingleplayer_logic.get_current_settings()
         button_settings = current_settings["buttons"]
         button_settings["texts"][list_index] = values["text"]

@@ -508,6 +508,11 @@ def export_package_directory(settings, destination, *, source_base=None):
     """
     staging = None
     try:
+        if isinstance(settings, dict) and settings.get("schema_version") == 3:
+            try:
+                settings = presets.extract_export_board(settings)
+            except presets.PresetValidationError as error:
+                raise PackageValidationError(error.code, error.location, str(error)) from error
         destination = _native_path(destination)
         base = _native_path(source_base) if source_base is not None else None
         _require(destination.is_absolute() and ".." not in destination.parts and
@@ -850,6 +855,7 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
         # Version-1 packages contain audio/board data only. Replacing a board
         # also clears its local background; other presets remain untouched.
         active.pop("background_image", None)
+        active.pop("audio_pools", None)
         active["buttons"]["paths"] = [
             str(installed.joinpath(*p.split("/"))) if p else ""
             for p in validated.settings["buttons"]["paths"]]

@@ -11,6 +11,10 @@ extension restriction or package-relative-path rule applies to local settings.
 
 UUID strings must use the hyphenated UUID representation (case is preserved).
 Each preset may additionally contain background_image, a local path string.
+Optional audio_pools maps 1-based slot strings to validated pool configurations.
+Its first path must match the legacy slot path; selected_audio is a stable path.
+The flat schema-2 projection omits pool metadata; exports must use the guarded
+extract_export_board projection instead. No old document gains optional fields.
 Absent or empty means disabled; validation never checks/resolves files or adds
 the field to old documents. Schema-2 extraction deliberately omits it; new presets
 start without an image, duplicates copy the string, deletion never touches files.
@@ -48,6 +52,7 @@ from copy import deepcopy
 import json
 import unicodedata
 from uuid import UUID, uuid4, uuid5
+from jingleplayer_audio_pools import validate_pool
 
 
 PRESET_SCHEMA_VERSION = 3
@@ -160,9 +165,9 @@ def validate_schema3_settings(data):
     _require(type(presets) is list and bool(presets), "presets", "presets", "expected nonempty preset list")
     ids, names = set(), set()
     for index, preset in enumerate(presets):
-        optional = {"background_image"} if isinstance(preset, dict) and "background_image" in preset else set()
+        optional = set(preset) & {"background_image", "audio_pools"} if isinstance(preset, dict) else set()
         _object(preset, _BOARD | {"id", "name"} | optional, f"presets[{index}]")
-        if optional:
+        if "background_image" in optional:
             _string(preset["background_image"], f"presets[{index}].background_image")
         identity = UUID(validate_preset_id(preset["id"]))
         name = _name_key(validate_preset_name(preset["name"]))
@@ -171,6 +176,19 @@ def validate_schema3_settings(data):
         ids.add(identity)
         names.add(name)
         _validate_fields(preset)
+        if "audio_pools" in optional:
+            pools = preset["audio_pools"]
+            _require(type(pools) is dict, "pool", f"presets[{index}].audio_pools", "expected slot mapping")
+            for slot, pool in pools.items():
+                location = f"presets[{index}].audio_pools.{slot}"
+                _require(type(slot) is str and slot in {str(i) for i in range(1, 51)},
+                         "pool", location, "expected slot 1..50")
+                try:
+                    validate_pool(pool)
+                except ValueError as error:
+                    raise PresetValidationError("pool", location, str(error)) from error
+                _require(preset["buttons"]["paths"][int(slot) - 1] == pool["audio_pool"][0],
+                         "pool_conflict", location, "compatibility path must equal first pool entry")
     active = UUID(validate_preset_id(data["active_preset_id"]))
     _require(active in ids, "active_id", "active_preset_id", "active preset does not exist")
     return deepcopy(data)
@@ -239,6 +257,15 @@ def extract_active_board(data):
     preset = next(p for p in snapshot["presets"] if UUID(p["id"]) == active)
     return {"schema_version": 2, **{key: snapshot[key] for key in _GLOBALS},
             **{key: preset[key] for key in _BOARD}}
+
+
+def extract_export_board(data):
+    """Phase-17 package projection; reject multi-file pools before losing metadata."""
+    snapshot = validate_schema3_settings(data)
+    preset = snapshot["presets"][_preset_index(snapshot, snapshot["active_preset_id"])]
+    _require(not any(len(p["audio_pool"]) > 1 for p in preset.get("audio_pools", {}).values()),
+             "pool_export", "audio_pools", "Audio-Pools mit mehreren Dateien benötigen Phase 18D.")
+    return extract_active_board(snapshot)
 
 
 def _preset_index(data, preset_id, *, location="preset.id"):

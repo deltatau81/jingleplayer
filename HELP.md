@@ -30,6 +30,44 @@ die Sicherung an den bestätigten Settingspfad zurückkopieren.
 
 ## Hauptfenster
 
+### Audio-Pools und Dateiauswahl
+
+Rechtsklick auf die Kachel → **Jingle bearbeiten**. **Einzeldatei** verwendet die
+bisherige Audiodatei. Für mehrere Dateien **Audio-Pool** wählen, mit **Hinzufügen…**
+MP3/WAV-Dateien aufnehmen und mit **Nach oben / Nach unten** ordnen. Die Liste ist
+scrollbar und zeigt vollständige Pfade, damit gleiche Dateinamen unterscheidbar
+bleiben. **Entfernen** nimmt den markierten Eintrag heraus, **Leeren** entfernt
+alle Einträge im Entwurf. Speichern eines leeren Pools entfernt die Zuordnung;
+keine dieser Aktionen löscht Dateien. **Abbrechen** verwirft sämtliche Änderungen.
+
+**Sequenziell** beginnt bei der ersten Datei und geht nach jedem erfolgreichen
+Start weiter; nach der letzten beginnt die Reihenfolge erneut. **Zufällig**
+vermeidet direkte Wiederholungen, wenn eine andere Datei abspielbar ist.
+**Manuell** verwendet die markierte Datei. Im Hauptfenster gibt es dafür eine
+Dateiauswahl auf der Kachel; sie ist auch per Tastatur bedienbar. Ihre Änderung
+startet keinen Sound und verändert keine bereits laufende Wiedergabe. Ein normaler
+Linksklick startet/stoppt weiterhin; Rechtsklick öffnet weiterhin die Einstellungen.
+Die manuelle Auswahl wird gespeichert. Entfernen der markierten Datei wählt den
+nachfolgenden, am Listenende den vorherigen Eintrag.
+
+Fehlende Dateien werden nach einer Prüfung im Hintergrund gekennzeichnet. Die
+Anzeige bestätigt keine Abspielbarkeit; erst pygame erkennt beschädigte Audiodaten.
+Automatische Modi versuchen jeden Kandidaten höchstens einmal pro Start und
+überspringen fehlende oder nicht ladbare Dateien. Die Statuszeile nennt Fehler;
+wenn keine Datei funktioniert, erscheint eine Fehlermeldung. Manuell gibt es
+keinen stillen Ersatz. Gespeicherte Pfade werden bei Fehlern nicht gelöscht.
+
+Pools werden pro Preset gespeichert und beim Duplizieren übernommen. Neue Presets
+haben keine Pools; das Löschen eines Presets löscht keine Audiodateien. Reihenfolge
+und Zufallshistorie starten nach Wechsel/Neustart oder Pooländerung neu. Natürliches
+Soundende startet nie die nächste Datei automatisch. Fadeout, Buttonlautstärke,
+globale Lautstärke und parallele Wiedergabe bleiben verfügbar.
+
+Mehrdatei-Pools sind bis Phase 18D nicht portabel exportierbar. Der Export wird
+vor der Ordnerauswahl mit einer Erklärung abgebrochen, auch bei ausgeblendeten
+Slots. Es gibt keinen unvollständigen Teil-Export. Einzeldatei-Pakete bleiben
+kompatibel; ihr Import enthält keine Poolkonfiguration.
+
 ### Hintergrundbild des aktiven Presets
 
 Im Menü **Presets → Hintergrundbild auswählen…** eine lokale PNG- oder JPEG-Datei
@@ -208,7 +246,7 @@ erhalten. Die aktive Settingsdatei muss bereits existieren.
 Audiodaten werden in einen eigenen Ordner unter `~/.jingleplayer/library/` kopiert;
 der ursprüngliche Paketordner wird danach nicht zur Wiedergabe benötigt. Paketpfade
 verwenden `/` unter `Musik/`; installierte Zuweisungen sind native absolute Pfade.
-ZIP-Pakete und Jingle-Pools sind nicht implementiert. Import kann ein neues Preset hinzufügen oder ausdrücklich nur das aktive ersetzen; Export umfasst nur das aktive Preset.
+ZIP-Pakete und portable Mehrdatei-Pools sind noch nicht implementiert. Lokale Audio-Pools sind verfügbar. Import kann ein neues Preset hinzufügen oder ausdrücklich nur das aktive ersetzen; Export umfasst nur das aktive Preset.
 
 ### Fehler und Wiederherstellung
 

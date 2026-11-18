@@ -11,6 +11,7 @@ import json
 import tempfile
 from uuid import UUID
 import jingleplayer_presets as presets
+from jingleplayer_audio_pools import PoolSelector, pool_file_path
 import jingleplayer_preset_storage as preset_storage
 from copy import deepcopy
 from pathlib import Path
@@ -39,6 +40,36 @@ PRE_PYSIDE6_BACKUP_NAME = "jingleplayer_settings.pre-pyside6.json"
 current_jingle = None
 jingle_playing = False
 sounds = {} # Cache: normalisierter Dateipfad -> pygame Sound
+_pool_selector = PoolSelector()
+
+
+def get_active_audio_pool(index):
+    if settings.get("schema_version") != 3:
+        return None
+    active = next(p for p in settings["presets"] if UUID(p["id"]) == UUID(settings["active_preset_id"]))
+    return deepcopy(active.get("audio_pools", {}).get(str(index)))
+
+
+def play_button(index, fallback_path, duration):
+    """Select a pool source, then use the unchanged cached pygame start path."""
+    pool = get_active_audio_pool(index)
+    if pool is None or index in playing_channels:
+        return play_jingle(index, fallback_path, duration)
+    key = (settings["active_preset_id"], index)
+    errors = []
+    for raw in _pool_selector.candidates(key, pool):
+        try:
+            path = pool_file_path(raw, Path(settings_file).parent)
+            if not path.is_file():
+                raise ValueError("Datei fehlt oder ist nicht erreichbar.")
+            result = play_jingle(index, str(path), duration)
+            if result.get("success") and result.get("indicator_update", {}).get("playing"):
+                _pool_selector.started(key, pool, raw)
+                return {**result, "selected_audio": raw, "warnings": errors}
+            errors.append(f"{raw}: {result.get('error', 'Wiedergabestart fehlgeschlagen')}")
+        except (ValueError, OSError) as error:
+            errors.append(f"{raw}: {error}")
+    return {"success": False, "error": "Keine Pooldatei konnte gestartet werden:\n" + "\n".join(errors)}
 playing_channels = {}  # Map button index -> pygame Channel (für Laufzeit-Volume-Updates)
 _playbacks_by_event = {}  # Map endevent id -> (button index, exact Channel)
 _events_by_button = {}  # Map button index -> endevent id
@@ -372,9 +403,13 @@ def play_jingle(index, jingle_path, current_fadeout_duration): # Nimmt fadeout_d
             channel.set_volume(calculate_effective_volume(set_volume, _button_volume(index)))
             channel.play(sound)
         except Exception:
-            _release_playback(index, channel)
-            _playbacks_by_event.pop(event_type, None)
-            _events_by_button.pop(index, None)
+            try:
+                channel.stop()
+                channel.set_endevent(0)
+            finally:
+                _release_playback(index, channel)
+                _playbacks_by_event.pop(event_type, None)
+                _events_by_button.pop(index, None)
             raise
         playing_channels[index] = channel
         _sync_legacy_playback_state()
@@ -466,6 +501,8 @@ def set_volume_logic(volume_percent):
 def _apply_document(document):
     global settings, button_texts, button_colors, jingle_paths, button_volumes
     global buttons_per_row, fadeout_duration, button_height, set_volume
+    if settings.get("active_preset_id") != document.get("active_preset_id"):
+        _pool_selector.reset()
     settings = deepcopy(document)
     board = presets.extract_active_board(document)
     button_texts = board["buttons"]["texts"]
@@ -522,6 +559,8 @@ def manage_presets(operation, *args, **kwargs):
             stop_all_playback()
         result = save_settings(document)
         if result["success"]:
+            if switching:
+                _pool_selector.reset()
             _apply_document(document)
         return result
     except (ValueError, OSError, RuntimeError) as error:
