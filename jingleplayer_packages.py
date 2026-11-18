@@ -55,6 +55,7 @@ import shutil
 import sys
 import tempfile
 import unicodedata
+import uuid
 
 PACKAGE_VERSION = 1
 MANIFEST_NAME = "jingleplayer_package.json"
@@ -111,6 +112,37 @@ class PreparedImport:
     preparation_directory: Path
     settings: dict
     audio_paths: dict[str, Path]
+
+
+@dataclass(frozen=True)
+class ActivationResult:
+    """Committed disk configuration; no running application state is refreshed."""
+
+    settings_path: Path
+    installed_directory: Path
+    recovery_directory: Path
+    previous_sha256: str
+    settings_sha256: str
+    settings: dict
+    outcome: str = "committed"
+
+
+class ActivationError(PackageValidationError):
+    """Activation failed: outcome is not_committed, committed, or indeterminate.
+
+    retained_paths explicitly identifies recovery, installed/preparation data and
+    settings temporary files retained for inspection. Never automatically restore
+    a snapshot on this exception. 'committed' means the replace succeeded (or the
+    exact proposed bytes were observed after an exceptional replace); it does not
+    assert that another application has not subsequently changed settings.
+    """
+
+    def __init__(self, message, *, outcome, recovery_directory, installed_directory, retained_paths):
+        self.outcome = outcome
+        self.recovery_directory = recovery_directory
+        self.installed_directory = installed_directory
+        self.retained_paths = tuple(retained_paths)
+        super().__init__("activation", "activation", message)
 
 
 def _require(condition, code, location, message):
@@ -695,3 +727,229 @@ def prepare_package_import(package_directory, staging_root):
         if isinstance(error, PackageValidationError):
             raise
         raise PackageValidationError("preparation", str(package_directory), str(error)) from error
+
+
+def _receiving_settings(path):
+    """Read receiver without application imports; match its structural/version gate.
+
+    Existing board arrays are replaced, not migrated. Missing legacy local fields
+    use the application's 800x600/100 defaults; absent last_folder stays absent
+    (the application supplies its home fallback on next load). Local values that
+    are present must meet the current GUI's safe type/range requirements.
+    """
+    before = _safe_stat(path)
+    raw = _read_file(path, MAX_JSON_BYTES)
+    current = _json_file(path)
+    _require(type(current) is dict, "settings", str(path), "receiver must be an object")
+    _require(current.get("buttons") is None or type(current["buttons"]) is dict,
+             "settings", str(path), "receiver buttons must be an object")
+    version = current.get("schema_version")
+    _require(version is None or (type(version) is int and version <= 2),
+             "settings", str(path), "unsupported receiver schema")
+    size = current.get("window_size", [800, 600])
+    _require(type(size) is list and len(size) == 2, "settings", "window_size", "expected two dimensions")
+    for value in size:
+        _integer(value, 1, None, "window_size")
+    _integer(current.get("volume", 100), 0, 100, "volume")
+    _require("last_folder" not in current or type(current["last_folder"]) is str,
+             "settings", "last_folder", "receiver last_folder must be a string")
+    _require(_identity(_safe_stat(path)) == _identity(before) and
+             _read_file(path, MAX_JSON_BYTES) == raw,
+             "conflict", str(path), "receiver changed while reading")
+    return raw, current, before
+
+
+def _write_recovery_bytes(path, value):
+    with path.open("xb") as stream:
+        stream.write(value)
+        stream.flush()
+        os.fsync(stream.fileno())
+    _require(_read_file(path, max(MAX_JSON_BYTES, len(value))) == value,
+             "recovery", str(path), "written snapshot verification failed")
+
+
+def _ensure_activation_migration_backup(settings_path, original):
+    backup = settings_path.with_name("jingleplayer_settings.pre-pyside6.json")
+    if not os.path.lexists(backup):
+        try:
+            _write_recovery_bytes(backup, original)
+        except FileExistsError:
+            pass  # Another writer won; compare rather than replace.
+    _require(_read_file(backup, MAX_JSON_BYTES) == original,
+             "backup", str(backup), "existing migration backup differs; activation blocked")
+
+
+def _check_settings_fingerprint(path, original, info):
+    _check_directory_chain(path.parent)
+    _require(_identity(_safe_stat(path)) == _identity(info) and
+             _read_file(path, MAX_JSON_BYTES) == original,
+             "conflict", str(path), "active settings changed during activation")
+
+
+def activate_prepared_import(prepared, settings_path, library_root, recovery_root):
+    """Install and commit a prepared board on disk; return ActivationResult.
+
+    All paths must be explicit absolute native paths without traversal or links.
+    Settings must already be a regular file; roots must already be directories.
+    Source/preparation/library/recovery trees must be disjoint, and settings must
+    be outside them. The source package need not still exist. No home/CWD lookup,
+    GUI/audio imports, playback changes or runtime-global settings updates occur.
+    Caller confirmation/coordination and subsequent runtime refresh are external.
+
+    Recovery layout: recovery_root/import-<uuid>/jingleplayer_settings.json holds
+    exact original bytes; recovery.json records recovery_version=1, settings_path,
+    settings_size, settings_sha256, proposed_settings_sha256 and library_directory.
+    Each attempt uses new names; recovery is never deleted, including partial
+    recovery on failure. It is independently usable by verifying size/hash and
+    explicitly restoring its JSON; no automatic restore is implemented here.
+    Legacy (<2 or absent version) receivers additionally require the existing
+    pre-pyside6 byte-for-byte backup rule, without overwriting that backup.
+
+    Assets are prepared anew beneath library_root, then published using the
+    existing no-replace atomic directory rename into import-<uuid>. Installed
+    package metadata stays portable for integrity checking; active settings alone
+    contain installed native absolute paths. Old and new library data are never
+    deleted on failure: even apparently unused assets could have concurrent users.
+    Retained paths are reported by ActivationError, including partial owned data.
+
+    Before commit: validate installed data, verify recovery and fingerprint the
+    active settings immediately before same-directory os.replace of a flushed,
+    fsynced UTF-8 schema-2 JSON temporary file. Receiver window_size, volume,
+    last_folder and unknown top-level extensions are retained; imported board
+    fields replace the old board entirely; obsolete background_image is removed.
+    Unknown old button extensions are discarded with the replaced board.
+
+    No shared lock exists in the application writer. Fingerprints detect observed
+    changes/replacements but cannot close the check-to-replace race or detect an
+    edit restored to identical bytes/identity. Ancestors must be stable/trusted,
+    as for preparation. Revalidation cannot identify a byte-identical replacement
+    made before this call: PreparedImport records content, not original file IDs.
+    This is not an OS sandbox or a multi-filesystem transaction. A crash may leave
+    recovery, partial preparation, an unused installed directory or a settings
+    temp file; atomic visibility is not a guarantee of power-loss durability.
+    Failure after/around replace never triggers a blind restore; inspect outcome.
+    """
+    recovery = installed = staged = temporary = None
+    attempted = committed = False
+    original = encoded = None
+    retained = []
+    try:
+        _require(isinstance(prepared, PreparedImport), "type", "prepared", "expected PreparedImport")
+        package = _preparation_path(prepared.preparation_directory, "preparation_directory")
+        library = _preparation_path(library_root, "library_root")
+        recoveries = _preparation_path(recovery_root, "recovery_root")
+        settings_path = Path(settings_path)
+        _require(settings_path.is_absolute() and ".." not in settings_path.parts,
+                 "path", "settings_path", "expected absolute settings path without traversal")
+        _check_directory_chain(settings_path.parent)
+        trees = (package.resolve(), library.resolve(), recoveries.resolve())
+        for index, tree in enumerate(trees):
+            _require(not settings_path.resolve().is_relative_to(tree),
+                     "layout", str(settings_path), "settings must be outside managed/package trees")
+            for other in trees[index + 1:]:
+                _require(not tree.is_relative_to(other) and not other.is_relative_to(tree),
+                         "layout", str(tree), "package/library/recovery roots must be disjoint")
+        # Include source provenance in the layout check without requiring it to exist.
+        source = Path(prepared.source_directory)
+        _require(source.is_absolute() and ".." not in source.parts,
+                 "path", "source_directory", "expected absolute source provenance")
+        for tree in trees[1:]:
+            _require(not tree.is_relative_to(source) and not source.is_relative_to(tree),
+                     "layout", str(tree), "managed roots must be disjoint from source")
+        _require(not settings_path.is_relative_to(source), "layout", str(settings_path),
+                 "settings must be outside source package")
+        validated = validate_package_directory(package)
+        _require(validated == prepared.source_package, "integrity", str(package),
+                 "prepared package differs from recorded source snapshot")
+        # Never trust caller-mutable mapped settings or audio_paths for installation.
+        original, receiver, receiver_info = _receiving_settings(settings_path)
+        operation = "import-" + uuid.uuid4().hex
+        installed = library / operation
+        recovery = recoveries / operation
+        next_settings = deepcopy(receiver)
+        next_settings.update(deepcopy(validated.settings))
+        next_settings["window_size"] = deepcopy(receiver.get("window_size", [800, 600]))
+        next_settings["volume"] = receiver.get("volume", 100)
+        if "last_folder" in receiver:
+            next_settings["last_folder"] = receiver["last_folder"]
+        else:
+            next_settings.pop("last_folder", None)
+        next_settings.pop("background_image", None)
+        next_settings["buttons"]["paths"] = [
+            str(installed.joinpath(*p.split("/"))) if p else ""
+            for p in validated.settings["buttons"]["paths"]]
+        encoded = json.dumps(next_settings, indent=4, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        _require(len(encoded) <= MAX_JSON_BYTES, "limit", "active settings", "settings byte limit exceeded")
+        old_digest, new_digest = hashlib.sha256(original).hexdigest(), hashlib.sha256(encoded).hexdigest()
+        metadata = {"recovery_version": 1, "settings_path": str(settings_path),
+                    "settings_size": len(original), "settings_sha256": old_digest,
+                    "proposed_settings_sha256": new_digest, "library_directory": str(installed)}
+        _check_directory_chain(recoveries)
+        recovery.mkdir(mode=0o700)  # Fail if any racing entry exists.
+        retained.append(recovery)
+        recovery_owner = _directory_identity(recovery)
+        _check_preparation_owner(recovery, recovery_owner)
+        snapshot_path = recovery / SETTINGS_NAME
+        _write_recovery_bytes(snapshot_path, original)
+        _check_preparation_owner(recovery, recovery_owner)
+        _write_export_json(recovery / "recovery.json", metadata)
+        # Reuse non-activating preparation and its copy/ownership checks.
+        staged_result = prepare_package_import(package, library)
+        staged = staged_result.preparation_directory
+        retained.append(staged)
+        _require(staged_result.source_package == validated, "integrity", str(staged),
+                 "prepared input changed while installing")
+        _check_directory_chain(library)
+        _publish_directory(staged, installed)
+        retained.remove(staged)
+        staged = None
+        retained.append(installed)
+        installed_owner = _directory_identity(installed)
+        _require(validate_package_directory(installed) == validated,
+                 "integrity", str(installed), "installed package verification failed")
+        if receiver.get("schema_version") is None or receiver["schema_version"] < 2:
+            _check_settings_fingerprint(settings_path, original, receiver_info)
+            _ensure_activation_migration_backup(settings_path, original)
+        _check_directory_chain(settings_path.parent)
+        with tempfile.NamedTemporaryFile(mode="wb", dir=settings_path.parent,
+                                         prefix=f".{settings_path.name}.import-", suffix=".tmp",
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            retained.append(temporary)
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        _require(_read_file(temporary, MAX_JSON_BYTES) == encoded,
+                 "integrity", str(temporary), "settings temporary file verification failed")
+        _check_preparation_owner(recovery, recovery_owner)
+        _require(_read_file(snapshot_path, MAX_JSON_BYTES) == original and
+                 _json_file(recovery / "recovery.json") == metadata,
+                 "recovery", str(recovery), "recovery changed before commit")
+        _check_preparation_owner(installed, installed_owner)
+        _require(validate_package_directory(installed) == validated,
+                 "integrity", str(installed), "installed files changed before commit")
+        result = ActivationResult(settings_path, installed, recovery, old_digest, new_digest, next_settings)
+        _check_settings_fingerprint(settings_path, original, receiver_info)
+        attempted = True
+        os.replace(temporary, settings_path)
+        committed = True
+        return result
+    except (OSError, TypeError, ValueError, RecursionError) as error:
+        outcome = "committed" if committed else "not_committed"
+        if attempted and not committed:
+            try:
+                observed = _read_file(settings_path, MAX_JSON_BYTES)
+                outcome = "committed" if observed == encoded else (
+                    "not_committed" if observed == original else "indeterminate")
+            except (OSError, ValueError):
+                outcome = "indeterminate"
+        # Retain uncertain files rather than risk deleting a concurrent user's data.
+        if isinstance(error, ActivationError):
+            raise
+        if isinstance(error, PackageValidationError) and error.code == "cleanup":
+            retained.append(Path(error.location))
+        if installed is not None and os.path.lexists(installed) and installed not in retained:
+            retained.append(installed)
+        raise ActivationError(str(error), outcome=outcome, recovery_directory=recovery,
+                              installed_directory=installed,
+                              retained_paths=retained) from error

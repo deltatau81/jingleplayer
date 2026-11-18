@@ -1024,3 +1024,352 @@ def test_prepare_rejects_windows_junctions(tmp_path, kind):
                                         link if kind == "staging" else staging)
     assert caught.value.code == "link"
     assert not list(staging.iterdir())
+
+
+def activation_fixture(tmp_path):
+    source_settings, _, package = export_board(tmp_path, ("a.MP3", "b.WAV"))
+    source_settings["buttons"]["paths"][0] = source_settings["buttons"]["paths"][49]
+    packages.export_package_directory(source_settings, package)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    prepared = packages.prepare_package_import(package, staging)
+    settings_path = tmp_path / "active.json"
+    receiver = board()
+    receiver.update(window_size=[1234, 777], volume=37, last_folder=str(tmp_path / "local audio"),
+                    local_extension={"keep": True})
+    receiver["buttons"]["texts"][0] = "old board"
+    receiver["buttons"]["paths"][49] = str(tmp_path / "old.wav")
+    settings_path.write_bytes(json.dumps(receiver, indent=4, ensure_ascii=False).encode("utf-8"))
+    library, recovery = tmp_path / "library", tmp_path / "recovery"
+    library.mkdir()
+    recovery.mkdir()
+    return prepared, settings_path, library, recovery
+
+
+def activate(args):
+    return packages.activate_prepared_import(*args)
+
+
+def test_activate_end_to_end_preserves_receiver_and_all_slots(tmp_path, monkeypatch):
+    args = activation_fixture(tmp_path)
+    prepared, settings_path, library, recoveries = args
+    caller_snapshot = deepcopy(prepared)
+    prior = settings_path.read_bytes()
+    originals = {p: p.read_bytes() for root in (prepared.source_directory, prepared.preparation_directory)
+                 for p in root.rglob("*") if p.is_file()}
+    (library / "unrelated.wav").write_bytes(b"keep")
+    (recoveries / "existing.json").write_bytes(b"keep")
+    unrelated = tmp_path / "unrelated-cwd"
+    unrelated.mkdir()
+    monkeypatch.chdir(unrelated)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: pytest.fail("no home lookup")))
+    result = activate(args)
+    assert isinstance(result, packages.ActivationResult) and result.outcome == "committed"
+    assert result.installed_directory.parent == library
+    assert result.recovery_directory.parent == recoveries
+    current = json.loads(settings_path.read_bytes())
+    assert current == result.settings
+    assert current["window_size"] == [1234, 777] and current["volume"] == 37
+    assert current["last_folder"] == str(tmp_path / "local audio")
+    assert current["local_extension"] == {"keep": True}
+    assert len(current["buttons"]["paths"]) == 50
+    assert current["buttons"]["paths"][0] == current["buttons"]["paths"][49]
+    for key in ("texts", "colors", "volumes", "per_row"):
+        assert current["buttons"][key] == prepared.source_package.settings["buttons"][key]
+    for path in current["buttons"]["paths"]:
+        if path:
+            assert Path(path).is_absolute() and Path(path).is_relative_to(result.installed_directory)
+            assert Path(path).is_file() and not Path(path).is_relative_to(prepared.preparation_directory)
+    assert packages.validate_package_directory(result.installed_directory) == prepared.source_package
+    snapshot = result.recovery_directory / packages.SETTINGS_NAME
+    assert snapshot.read_bytes() == prior
+    meta = json.loads((result.recovery_directory / "recovery.json").read_text())
+    assert meta["settings_sha256"] == hashlib.sha256(prior).hexdigest() == result.previous_sha256
+    assert meta["settings_size"] == len(prior)
+    assert meta["proposed_settings_sha256"] == hashlib.sha256(settings_path.read_bytes()).hexdigest()
+    assert prepared == caller_snapshot
+    assert {p: p.read_bytes() for p in originals} == originals
+    assert (library / "unrelated.wav").read_bytes() == b"keep"
+    assert (recoveries / "existing.json").read_bytes() == b"keep"
+    assert not (settings_path.parent / "jingleplayer_settings.pre-pyside6.json").exists()
+    assert Path.cwd() == unrelated
+
+
+def test_activate_repeated_unique_operations(tmp_path):
+    args = activation_fixture(tmp_path)
+    first = activate(args)
+    first_bytes = args[1].read_bytes()
+    second = activate(args)
+    assert first.installed_directory != second.installed_directory
+    assert first.recovery_directory != second.recovery_directory
+    assert (second.recovery_directory / packages.SETTINGS_NAME).read_bytes() == first_bytes
+    assert packages.validate_package_directory(first.installed_directory) == args[0].source_package
+
+
+def test_activate_fifty_distinct_assets_including_hidden_slots(tmp_path):
+    args = list(activation_fixture(tmp_path))
+    asset_root = tmp_path / "fifty-sources"
+    asset_root.mkdir()
+    settings, _, package = export_board(asset_root, tuple(f"{i}.wav" for i in range(50)))
+    packages.export_package_directory(settings, package)
+    args[0] = packages.prepare_package_import(package, tmp_path / "staging")
+    result = activate(args)
+    assert len(set(result.settings["buttons"]["paths"])) == 50
+    assert len(packages.validate_package_directory(result.installed_directory).assets) == 50
+
+
+@pytest.mark.parametrize("kind", ["recovery", "installed"])
+def test_activate_final_revalidation_blocks_late_corruption(tmp_path, monkeypatch, kind):
+    args = activation_fixture(tmp_path)
+    original = args[1].read_bytes()
+    temp_factory = packages.tempfile.NamedTemporaryFile
+
+    def corrupt_before_commit(*a, **kw):
+        if kind == "recovery":
+            next(args[3].glob("*/jingleplayer_settings.json")).write_bytes(b"changed")
+        else:
+            next(args[2].glob("import-*/Musik/*")).write_bytes(b"changed")
+        return temp_factory(*a, **kw)
+
+    monkeypatch.setattr(packages.tempfile, "NamedTemporaryFile", corrupt_before_commit)
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert args[1].read_bytes() == original
+    assert caught.value.outcome == "not_committed"
+
+
+def test_activate_detects_same_byte_settings_file_replacement(tmp_path, monkeypatch):
+    args = activation_fixture(tmp_path)
+    original = args[1].read_bytes()
+    publish = packages._publish_directory
+
+    def replace_receiver(staged, installed):
+        publish(staged, installed)
+        replacement = args[1].with_name("concurrent.json")
+        replacement.write_bytes(original)
+        packages.os.replace(replacement, args[1])
+
+    monkeypatch.setattr(packages, "_publish_directory", replace_receiver)
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert caught.value.outcome == "not_committed"
+    assert args[1].read_bytes() == original
+
+
+@pytest.mark.parametrize("kind", ["missing", "hash", "metadata", "extra", "caller_snapshot"])
+def test_activate_rejects_invalid_preparation_without_settings_change(tmp_path, kind):
+    args = activation_fixture(tmp_path)
+    prepared, active, library, recovery = args
+    original = active.read_bytes()
+    asset = next(iter(prepared.audio_paths.values()))
+    if kind == "missing":
+        asset.unlink()
+    elif kind == "hash":
+        asset.write_bytes(b"corrupted")
+    elif kind == "metadata":
+        (prepared.preparation_directory / packages.MANIFEST_NAME).write_bytes(b"{")
+    elif kind == "extra":
+        (prepared.preparation_directory / "extra").write_bytes(b"bad")
+    else:
+        prepared.source_package.settings["volume"] = 32
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert caught.value.outcome == "not_committed"
+    assert active.read_bytes() == original
+    assert not list(library.iterdir()) and not list(recovery.iterdir())
+
+
+def test_activate_ignores_mutable_mapped_paths_and_settings(tmp_path):
+    args = activation_fixture(tmp_path)
+    args[0].settings["buttons"]["paths"][0] = "unsafe mapping"
+    args[0].audio_paths.clear()
+    result = activate(args)
+    assert result.settings["buttons"]["paths"][0].startswith(str(result.installed_directory))
+
+
+@pytest.mark.parametrize("raw", [b"{", b"[]", b'{"schema_version":99}', b'{"buttons":[]}',
+                                      b'{"volume":true}', b'{"window_size":[0,5]}'])
+def test_activate_rejects_invalid_receiver(tmp_path, raw):
+    args = activation_fixture(tmp_path)
+    args[1].write_bytes(raw)
+    with pytest.raises(packages.ActivationError):
+        activate(args)
+    assert args[1].read_bytes() == raw
+    assert not list(args[2].iterdir()) and not list(args[3].iterdir())
+
+
+@pytest.mark.parametrize("version", [None, 1])
+def test_activate_legacy_receiver_backup_and_defaults(tmp_path, version):
+    args = activation_fixture(tmp_path)
+    old = {"buttons": {"texts": ["legacy"]}}
+    if version is not None:
+        old["schema_version"] = version
+    original = json.dumps(old).encode()
+    args[1].write_bytes(original)
+    result = activate(args)
+    backup = args[1].with_name("jingleplayer_settings.pre-pyside6.json")
+    assert backup.read_bytes() == original
+    assert result.settings["schema_version"] == 2
+    assert result.settings["window_size"] == [800, 600] and result.settings["volume"] == 100
+    assert "last_folder" not in result.settings
+    assert (result.recovery_directory / packages.SETTINGS_NAME).read_bytes() == original
+
+
+def test_activate_conflicting_legacy_backup_blocks_commit(tmp_path):
+    args = activation_fixture(tmp_path)
+    original = b'{"schema_version":1}'
+    args[1].write_bytes(original)
+    backup = args[1].with_name("jingleplayer_settings.pre-pyside6.json")
+    backup.write_bytes(b"existing backup")
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert args[1].read_bytes() == original
+    assert backup.read_bytes() == b"existing backup"
+    assert caught.value.recovery_directory.is_dir()
+
+
+@pytest.mark.parametrize("point", ["copy", "installed_hash", "recovery", "settings_write", "replace"])
+def test_activate_failures_preserve_active_and_report_recovery(tmp_path, monkeypatch, point):
+    args = activation_fixture(tmp_path)
+    original = args[1].read_bytes()
+    if point == "copy":
+        monkeypatch.setattr(packages, "_copy_asset", lambda *a, **k: (_ for _ in ()).throw(OSError("copy failure")))
+    elif point == "installed_hash":
+        publish = packages._publish_directory
+
+        def corrupt(staged, installed):
+            publish(staged, installed)
+            next((installed / "Musik").iterdir()).write_bytes(b"corrupted installed asset")
+
+        monkeypatch.setattr(packages, "_publish_directory", corrupt)
+    elif point == "recovery":
+        monkeypatch.setattr(packages, "_write_recovery_bytes", lambda *a: (_ for _ in ()).throw(OSError("recovery failure")))
+    elif point == "settings_write":
+        named = packages.tempfile.NamedTemporaryFile
+
+        def fail_temp(*a, **k):
+            raise OSError("settings write failed")
+
+        monkeypatch.setattr(packages.tempfile, "NamedTemporaryFile", fail_temp)
+    else:
+        monkeypatch.setattr(packages.os, "replace", lambda *a: (_ for _ in ()).throw(OSError("replace failed")))
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert args[1].read_bytes() == original
+    assert caught.value.outcome == "not_committed"
+    assert caught.value.recovery_directory.is_dir()
+    assert caught.value.recovery_directory in caught.value.retained_paths
+    if point != "recovery":
+        assert (caught.value.recovery_directory / packages.SETTINGS_NAME).read_bytes() == original
+        assert (caught.value.recovery_directory / "recovery.json").is_file()
+
+
+def test_activate_detects_concurrent_settings_change(tmp_path, monkeypatch):
+    args = activation_fixture(tmp_path)
+    publish = packages._publish_directory
+    concurrent = b'{"schema_version":2,"concurrent":"keep"}'
+
+    def race(staged, installed):
+        publish(staged, installed)
+        args[1].write_bytes(concurrent)
+
+    monkeypatch.setattr(packages, "_publish_directory", race)
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert caught.value.outcome == "not_committed"
+    assert args[1].read_bytes() == concurrent
+    assert caught.value.installed_directory in caught.value.retained_paths
+
+
+@pytest.mark.parametrize("changed_after", [False, True])
+def test_activate_exception_after_replace_never_restores(tmp_path, monkeypatch, changed_after):
+    args = activation_fixture(tmp_path)
+    replace = packages.os.replace
+    concurrent = b'{"another":"writer"}'
+
+    def replace_then_fail(source, target):
+        replace(source, target)
+        if changed_after:
+            args[1].write_bytes(concurrent)
+        raise OSError("exception after commit")
+
+    monkeypatch.setattr(packages.os, "replace", replace_then_fail)
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert caught.value.outcome == ("indeterminate" if changed_after else "committed")
+    if changed_after:
+        assert args[1].read_bytes() == concurrent
+    else:
+        assert len(json.loads(args[1].read_bytes())["buttons"]["paths"]) == 50
+    assert caught.value.recovery_directory.is_dir()
+
+
+@pytest.mark.parametrize("kind", ["library_inside_package", "recovery_in_library", "settings_in_library", "relative"])
+def test_activate_unsafe_layout_rejected(tmp_path, kind):
+    args = list(activation_fixture(tmp_path))
+    original = args[1].read_bytes()
+    original_path = args[1]
+    if kind == "library_inside_package":
+        args[2] = args[0].preparation_directory / "Musik"
+    elif kind == "recovery_in_library":
+        args[3] = args[2]
+    elif kind == "settings_in_library":
+        args[1] = args[2] / "settings.json"
+        args[1].write_bytes(original)
+    else:
+        args[1] = "active.json"
+    with pytest.raises(packages.ActivationError):
+        activate(args)
+    assert original_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("kind", ["prepared_asset", "library", "recovery", "active"])
+def test_activate_rejects_symlinks(tmp_path, kind):
+    args = list(activation_fixture(tmp_path))
+    if kind == "prepared_asset":
+        target = next(iter(args[0].audio_paths.values()))
+        outside = tmp_path / "outside.wav"
+        target.rename(outside)
+        symlink_or_skip(target, outside)
+    else:
+        index = {"library": 2, "recovery": 3, "active": 1}[kind]
+        link = tmp_path / "linked"
+        symlink_or_skip(link, args[index], kind != "active")
+        args[index] = link
+    with pytest.raises(packages.ActivationError):
+        activate(args)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction API")
+@pytest.mark.parametrize("kind", ["prepared", "library", "recovery"])
+def test_activate_rejects_junctions(tmp_path, kind):
+    args = list(activation_fixture(tmp_path))
+    target = args[0].preparation_directory / "Musik" if kind == "prepared" else args[2 if kind == "library" else 3]
+    outside = tmp_path / "outside"
+    target.rename(outside)
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(target), str(outside)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        pytest.skip(f"junction creation unavailable: {result.stderr}")
+    original = args[1].read_bytes()
+    with pytest.raises(packages.ActivationError):
+        activate(args)
+    assert args[1].read_bytes() == original
+
+
+def test_activate_library_destination_race_preserves_unrelated(tmp_path, monkeypatch):
+    args = activation_fixture(tmp_path)
+    publish = packages._publish_directory
+    original = args[1].read_bytes()
+
+    def race(staged, installed):
+        installed.mkdir()
+        (installed / "unrelated").write_bytes(b"keep")
+        publish(staged, installed)
+
+    monkeypatch.setattr(packages, "_publish_directory", race)
+    with pytest.raises(packages.ActivationError) as caught:
+        activate(args)
+    assert (caught.value.installed_directory / "unrelated").read_bytes() == b"keep"
+    assert args[1].read_bytes() == original
+    assert caught.value.installed_directory in caught.value.retained_paths
