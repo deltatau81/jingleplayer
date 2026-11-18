@@ -94,13 +94,25 @@ On Windows this normally resolves to:
 C:\Users\<username>\.jingleplayer\jingleplayer_settings.json
 ```
 
-The current format uses `schema_version` 2. All 50 slot configurations remain persistent independently of how many tiles are visible.
+Die lokale Settingsdatei verwendet jetzt `schema_version: 3`: globale Fenstergröße,
+Gesamtlautstärke und Audioordner sowie die Presetliste und die aktive Preset-ID.
+Jedes Preset erhält alle 50 Slots, Texte, Farben, Pfade, dB-Werte, Reihenlayout,
+Fadeout und Kachelhöhe. Die Auswahl im Hauptfenster und das Menü **Presets** bieten
+Erstellen, Duplizieren, Umbenennen und Löschen. Das letzte Preset ist geschützt;
+beim Löschen des aktiven Presets wird ein Nachfolger ausgewählt.
 
-Legacy pre-schema-2 settings are normalized in memory. Merely starting and closing Jingleplayer without a change does not rewrite the legacy file. On the first actual changed save, the original file is preserved byte-for-byte as:
+Schema 2 und unterstützte ältere Settings werden beim Laden nur im Speicher in
+ein Standard-Preset migriert. Erst ein tatsächlicher Save schreibt Schema 3 und
+legt vorher ein bytegenaues Backup an:
 
 ```text
-jingleplayer_settings.pre-pyside6.json
+jingleplayer_settings.json.pre-presets.<SHA256>.json
 ```
+
+Bestehende Pre-PySide6-Backups bleiben unverändert. Fehlerhafte oder unbekannte
+Felder werden nicht still verworfen, sondern blockieren die Migration. Die alte
+v1.0.0-Anwendung kann Schema 3 nicht laden; für einen Rückwechsel ist die geprüfte
+Pre-Preset-Sicherung nötig. [Preset-Details und Wiederherstellung](PRESETS.md).
 
 Corrupt or structurally invalid settings are not overwritten. Unsupported future schema versions block startup instead of being replaced. Load and save failures are reported through GUI error dialogs.
 
@@ -110,9 +122,9 @@ No fallback settings directory is used.
 
 Im Menü **Soundboard** stehen **Soundboard exportieren...** und **Soundboard importieren...** bereit. Export: vorhandenen Ziel-Elternordner auswählen, neuen Paketnamen eingeben und gegebenenfalls fehlende Audiozuweisungen ausdrücklich nur für den Export leeren. Alle 50 Plätze einschließlich ausgeblendeter Tasten werden berücksichtigt.
 
-Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. ZIP-Import, mehrere Presets und Jingle-Pools sind nicht implementiert.
+Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. Der Import kann ein neues Preset hinzufügen oder nach ausdrücklicher Auswahl nur das aktive ersetzen. Exportiert wird ausschließlich das aktive Preset; ZIP und Jingle-Pools bleiben nicht implementiert.
 
-Anleitung, Paketformat, Grenzen bei parallelen Schreibzugriffen und sichere manuelle Wiederherstellung: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). Import ersetzt das aktuelle Soundboard; die Kopie ist keine Garantie für vollständige Ausfallsicherheit.
+Anleitung, Paketformat, Grenzen bei parallelen Schreibzugriffen und sichere manuelle Wiederherstellung: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). Import bewahrt die übrigen Presets; die Kopie ist keine Garantie für vollständige Ausfallsicherheit.
 
 ## Requirements
 

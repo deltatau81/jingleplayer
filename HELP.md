@@ -6,6 +6,28 @@ Jingleplayer ist eine Desktop-Anwendung zum schnellen Abspielen von Jingles übe
 
 Mehrere Jingles können gleichzeitig und unabhängig voneinander abgespielt werden. Für jeden Jingle lassen sich Text, Farbe, Audiodatei und individuelle Lautstärke einstellen.
 
+## Presets
+
+Die Preset-Auswahl im Hauptfenster lädt das zuletzt aktive Soundboard auch nach
+einem Neustart. Im Menü **Presets**: **Neu…**, **Duplizieren…**, **Umbenennen…**,
+**Löschen…**. Namen müssen eindeutig sein (auch Großschreibung/Unicode-Varianten).
+Neue Presets starten ohne Audiozuweisungen. Duplizieren kopiert alle 50 Slots,
+aber keine Audiodateien. Löschen entfernt keine Audiodateien; das letzte Preset
+ist geschützt und ein aktives Preset braucht einen gewählten Nachfolger.
+
+Vor einem Wechsel werden aktuelle Änderungen gespeichert und alle Audiokanäle
+sofort gestoppt, auch Fadeouts. Fadeout und Kachelhöhe gehören zum Preset;
+Fenstergröße, Gesamtlautstärke und letzter Audioordner bleiben global.
+Bei Fehlern wird nicht automatisch zurückgeschrieben oder Audio erneut gestartet.
+
+Schema-2-Daten werden zunächst nur im Speicher zum Standard-Preset. Vor dem
+ersten Schema-3-Save wird eine exakte
+`jingleplayer_settings.json.pre-presets.<SHA256>.json`-Sicherung angelegt.
+Alte Pre-PySide6-Sicherungen bleiben unverändert. Bei unklarem Speicherzustand
+ist Speichern bis zum geprüften Neustart gesperrt. Alle Instanzen schließen,
+aktuellen Stand sichern, Backuphash prüfen und nur nach bewusster Entscheidung
+die Sicherung an den bestätigten Settingspfad zurückkopieren.
+
 ## Hauptfenster
 
 ### Jingle-Kacheln
@@ -91,7 +113,7 @@ Die Konfiguration wird normalerweise hier gespeichert:
 C:\Users\<Benutzer>\.jingleplayer\jingleplayer_settings.json
 ```
 
-Jingleplayer verwendet das Settings-Format Version 2. Gespeichert werden unter anderem:
+Jingleplayer verwendet lokal Settingsschema 3. Portable Pakete verwenden weiterhin Paketversion 1 und Board-Schema 2. Gespeichert werden unter anderem:
 
 - Texte, Farben und Audiodateien aller 50 Jingle-Plätze
 - individuelle Jingle-Lautstärken
@@ -109,7 +131,7 @@ Jingleplayer verwendet das Settings-Format Version 2. Gespeichert werden unter a
 Beim ersten tatsächlichen Speichern einer Änderung wird vor der Umstellung eine exakte Sicherung der bisherigen Datei angelegt:
 
 ```text
-jingleplayer_settings.pre-pyside6.json
+jingleplayer_settings.json.pre-presets.<SHA256>.json
 ```
 
 ### Beschädigte oder neuere Einstellungen
@@ -156,7 +178,7 @@ erhalten. Die aktive Settingsdatei muss bereits existieren.
 Audiodaten werden in einen eigenen Ordner unter `~/.jingleplayer/library/` kopiert;
 der ursprüngliche Paketordner wird danach nicht zur Wiedergabe benötigt. Paketpfade
 verwenden `/` unter `Musik/`; installierte Zuweisungen sind native absolute Pfade.
-ZIP-Pakete, mehrere Presets und Jingle-Pools sind nicht implementiert.
+ZIP-Pakete und Jingle-Pools sind nicht implementiert. Import kann ein neues Preset hinzufügen oder ausdrücklich nur das aktive ersetzen; Export umfasst nur das aktive Preset.
 
 ### Fehler und Wiederherstellung
 

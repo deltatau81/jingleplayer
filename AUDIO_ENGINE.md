@@ -108,3 +108,17 @@ Der Test erzeugt hörbare Signale. Vor dem Start eine moderate
 Systemlautstärke einstellen und die zehn interaktiven Schritte anhand der
 Konsolenausgaben bestätigen. Technische Checks und subjektive Hörprüfungen
 werden in der Abschlussübersicht getrennt gezählt.
+
+## Preset-Wechsel
+
+`stop_all_playback()` stoppt beim Preset-Wechsel alle Mixerkanäle, einschließlich
+nicht mehr in der Buttonzuordnung vorhandener Fadeouts. Kanal-Endevents werden
+deaktiviert, bereits verwendete Endevent-IDs aus der Queue entfernt und alle
+Spielzuordnungen zurückgesetzt. Der Event-Zähler wird nicht zurückgesetzt.
+Normales Einzelbutton-Fadeout und parallele Wiedergabe bleiben unverändert.
+
+Die lokale Anwendung speichert Schema 3. Laufzeitlisten sind die Projektion des
+aktiven Presets; `get_current_settings()` liefert weiterhin den flachen
+Schema-2-Board-Snapshot für GUI und Pakete. `get_preset_settings()` liefert das
+vollständige Dokument. Jeder reguläre Save läuft durch
+`jingleplayer_preset_storage`, einschließlich Paketaktivierung.

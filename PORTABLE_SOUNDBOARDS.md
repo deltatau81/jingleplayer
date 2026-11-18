@@ -35,7 +35,7 @@ sichern die übertragenen Bytes, beweisen aber keine abspielbare MP3/WAV-Datei.
 Verschwindet oder verändert sich eine Datei nach der Vorprüfung, kann der Export
 weiterhin fehlschlagen; er lässt dann keine absichtlich unvollständige Veröffentlichung zu.
 
-Der Export kopiert die aktuelle Laufzeitkonfiguration, einschließlich bereits
+Der Export kopiert ausschließlich das aktive Preset als kompatiblen Schema-2-Board-Snapshot, einschließlich bereits
 bestätigter Änderungen, deren Speichern fehlgeschlagen sein kann. Unbestätigte
 Dialogeingaben werden nicht übernommen. Originalaudio, aktive Settingsdatei und
 laufende Wiedergabe werden beim Export nicht verändert.
@@ -86,7 +86,7 @@ Grenzen: je JSON-Datei 1 MiB, höchstens 50 Assets, 1 GiB pro Asset und insgesam
 begrenzt. Unbekannte Paket-/Settingsfelder werden abgelehnt; `last_folder` ist im
 Paket nur leer oder abwesend zulässig und wird vom Export entfernt. Fremde Dateien
 im Paketordner, etwa nachträglich eingefügte Finder-Metadaten, können die Prüfung
-blockieren. ZIP-Pakete, mehrere Presets und Jingle-Pools werden nicht unterstützt.
+blockieren. ZIP-Pakete und Jingle-Pools werden nicht unterstützt; lokale Presets verwenden unabhängig davon Schema 3.
 
 ## Importieren
 
@@ -95,7 +95,7 @@ blockieren. ZIP-Pakete, mehrere Presets und Jingle-Pools werden nicht unterstüt
    existieren; bei einer Neuinstallation gegebenenfalls zuerst eine Einstellung speichern.
 2. Die vollständige Prüfung abwarten. Die Vorschau nennt die Zahl der Audiodateien
    und belegten Tasten einschließlich ausgeblendeter Plätze.
-3. Das vollständige Ersetzen der aktuellen Tastenbelegungen bestätigen. Abbrechen
+3. Den Import bestätigen und als Ziel ein neues Preset mit eindeutigem Namen oder ausdrücklich das Ersetzen des aktiven Presets wählen. Andere Presets bleiben unverändert. Abbrechen
    vor dieser Bestätigung ändert weder Wiedergabe noch Einstellungen.
 4. Nach Vorbereitung wird die Wiedergabe über die vorhandenen Engine-Methoden
    ohne Fadeout gestoppt. Der Import legt Recoverydaten an, installiert eine
@@ -142,7 +142,7 @@ und `os.replace` gewechselt. Vor diesem Wechsel lässt ein Importfehler die bish
 Settingsbytes unangetastet; konkurrierende Änderungen anderer Instanzen bleiben
 davon ausgenommen. Eine Fingerprintprüfung unmittelbar vor dem Wechsel erkennt
 beobachtete Änderungen, schließt aber das Zeitfenster zwischen Prüfung und Replace
-nicht. Die normale Anwendung verwendet keinen gemeinsamen Instanz-Lock. Für einen
+nicht. Die aktuelle Anwendung und der Import verwenden dieselbe kurze OS-Sperre über die persistente `.presets.lock`-Datei. Ältere Versionen oder externe Editoren beachten diese Sperre nicht. Für einen
 kontrollierten Wechsel andere Instanzen vorher schließen.
 
 Links, Junctions und Reparse-Punkte werden auch in Vorfahren abgelehnt. Das kann
@@ -182,7 +182,7 @@ Aktivierungszustände:
 3. In der gemeldeten Recoverydirectory `recovery.json` lesen. Sie enthält
    `recovery_version: 1`, `settings_path`, `settings_size`, `settings_sha256`,
    `proposed_settings_sha256` und `library_directory`. Die benachbarte
-   `jingleplayer_settings.json` enthält die **unveränderten Bytes vor dem Import**.
+   `jingleplayer_settings.json` enthält die **unveränderten Bytes vor dem Import** (den ganzen lokalen Presetbestand, nicht nur das aktive Board).
 4. Größe und SHA-256 der Recovery-JSON mit `settings_size` und `settings_sha256`
    vergleichen. Windows: `Get-FileHash -Algorithm SHA256 -LiteralPath '<Snapshot>'`
    und `(Get-Item -LiteralPath '<Snapshot>').Length`. macOS:
@@ -199,8 +199,8 @@ Aktivierungszustände:
 
 Recovery enthält Einstellungen, **keine Kopie der vorherigen externen Audiodateien**.
 Alte absolute Audioziele müssen weiterhin erreichbar sein. Ein Konflikt mit
-`jingleplayer_settings.pre-pyside6.json` blockiert einen Legacywechsel; dieses
-Migrationsbackup wird weder als Import-Recovery verwendet noch überschrieben.
+einem vorhandenen Pre-Preset-Backup blockiert die Umstellung. Ein vorhandenes
+`jingleplayer_settings.pre-pyside6.json` wird weder als Import-Recovery verwendet noch überschrieben.
 Auch teilweise fehlgeschlagene Recoverydaten bleiben erhalten. Fehlt die Metadatei
 oder stimmt der Hash nicht, nicht als automatisch geprüfte Wiederherstellung behandeln.
 Es gibt keinen Restore-Button und keinen automatischen Rückwechsel.
