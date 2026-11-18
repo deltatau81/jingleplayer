@@ -334,9 +334,16 @@ def _json_file(path):
         raise PackageValidationError("json", str(path), "malformed UTF-8 JSON") from error
 
 
+def _native_path(value):
+    """Reject NUL before filesystem/ctypes APIs can truncate native path strings."""
+    path = Path(value)
+    _require("\0" not in str(path), "path", str(path), "embedded NUL in path forbidden")
+    return path
+
+
 def validate_package_directory(root):
     """Read and hash a stable existing directory, without writing or activating it."""
-    root = Path(os.path.abspath(os.fspath(root)))
+    root = Path(os.path.abspath(os.fspath(_native_path(root))))
     try:
         for parent in reversed((root, *root.parents)):
             _safe_stat(parent, directory=True)
@@ -499,15 +506,14 @@ def export_package_directory(settings, destination, *, source_base=None):
     """
     staging = None
     try:
-        destination = Path(destination)
+        destination = _native_path(destination)
+        base = _native_path(source_base) if source_base is not None else None
         _require(destination.is_absolute() and ".." not in destination.parts and
                  destination.name not in ("", ".", ".."),
                  "destination", str(destination), "expected absolute destination without traversal")
         _check_directory_chain(destination.parent)
         _require(not os.path.lexists(destination), "destination", str(destination), "destination already exists")
-        base = None
         if source_base is not None:
-            base = Path(source_base)
             _require(base.is_absolute() and ".." not in base.parts,
                      "source", str(base), "expected absolute source_base without traversal")
             _check_directory_chain(base)
@@ -566,7 +572,7 @@ def export_package_directory(settings, destination, *, source_base=None):
 
 
 def _preparation_path(value, location):
-    path = Path(value)
+    path = _native_path(value)
     _require(path.is_absolute() and ".." not in path.parts,
              "path", location, "expected absolute native path without parent traversal")
     _check_directory_chain(path)
@@ -655,6 +661,8 @@ def prepare_package_import(package_directory, staging_root):
     prepared, owner = None, None
     created, allowed_dirs = {}, {"Musik"}
     try:
+        package_directory = _native_path(package_directory)
+        staging_root = _native_path(staging_root)
         source = _preparation_path(package_directory, "package_directory")
         staging = _preparation_path(staging_root, "staging_root")
         _require(not staging.resolve().is_relative_to(source.resolve()),
@@ -835,10 +843,14 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
     retained = []
     try:
         _require(isinstance(prepared, PreparedImport), "type", "prepared", "expected PreparedImport")
-        package = _preparation_path(prepared.preparation_directory, "preparation_directory")
+        package = _native_path(prepared.preparation_directory)
+        library_root = _native_path(library_root)
+        recovery_root = _native_path(recovery_root)
+        settings_path = _native_path(settings_path)
+        source = _native_path(prepared.source_directory)
+        package = _preparation_path(package, "preparation_directory")
         library = _preparation_path(library_root, "library_root")
         recoveries = _preparation_path(recovery_root, "recovery_root")
-        settings_path = Path(settings_path)
         _require(settings_path.is_absolute() and ".." not in settings_path.parts,
                  "path", "settings_path", "expected absolute settings path without traversal")
         _check_directory_chain(settings_path.parent)
@@ -850,7 +862,6 @@ def activate_prepared_import(prepared, settings_path, library_root, recovery_roo
                 _require(not tree.is_relative_to(other) and not other.is_relative_to(tree),
                          "layout", str(tree), "package/library/recovery roots must be disjoint")
         # Include source provenance in the layout check without requiring it to exist.
-        source = Path(prepared.source_directory)
         _require(source.is_absolute() and ".." not in source.parts,
                  "path", "source_directory", "expected absolute source provenance")
         for tree in trees[1:]:

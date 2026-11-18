@@ -4,7 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 
@@ -438,7 +438,9 @@ def test_unsafe_source_basenames_generate_safe_names(tmp_path, monkeypatch, base
 
     def unsafe_name(value, base):
         source, info = source_path(value, base)
-        return source.with_name(basename), info
+        # Host-independent filename metadata: do not ask WindowsPath to build
+        # e.g. a drive-relative 'a:b.wav'. Actual I/O uses the valid fixture below.
+        return PurePosixPath(basename), info
 
     copy_asset = packages._copy_asset
 
@@ -448,7 +450,7 @@ def test_unsafe_source_basenames_generate_safe_names(tmp_path, monkeypatch, base
     monkeypatch.setattr(packages, "_source_path", unsafe_name)
     monkeypatch.setattr(packages, "_copy_asset", copy_original)
     result = packages.export_package_directory(settings, destination)
-    assert result.assets[0].path == "Musik/asset-001" + Path(basename).suffix.lower()
+    assert result.assets[0].path == "Musik/asset-001" + PurePosixPath(basename).suffix.lower()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows cannot create these source basenames")
@@ -715,6 +717,45 @@ def test_export_rejects_ambiguous_or_invalid_api_paths(tmp_path, kind):
     with pytest.raises(packages.PackageValidationError):
         packages.export_package_directory(settings, destination, **kwargs)
     assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("parameter", [
+    "validation_root", "export_destination", "export_base", "prepare_package", "prepare_staging",
+    "activation_preparation", "activation_source", "activation_settings", "activation_library", "activation_recovery",
+])
+def test_public_native_path_parameters_reject_nul_before_filesystem_access(tmp_path, monkeypatch, parameter):
+    from dataclasses import replace
+
+    invalid = Path(str(tmp_path / "valid-prefix") + "\0suffix")
+
+    def no_filesystem(*args, **kwargs):
+        pytest.fail("NUL path must be rejected before filesystem access")
+
+    monkeypatch.setattr(Path, "lstat", no_filesystem)
+    monkeypatch.setattr(packages, "_check_directory_chain", no_filesystem)
+    with pytest.raises(packages.PackageValidationError, match="NUL"):
+        if parameter == "validation_root":
+            packages.validate_package_directory(invalid)
+        elif parameter.startswith("export_"):
+            packages.export_package_directory(
+                board(), invalid if parameter == "export_destination" else tmp_path / "destination",
+                source_base=invalid if parameter == "export_base" else None)
+        elif parameter.startswith("prepare_"):
+            packages.prepare_package_import(
+                invalid if parameter == "prepare_package" else tmp_path / "package",
+                invalid if parameter == "prepare_staging" else tmp_path / "staging")
+        else:
+            prepared = packages.PreparedImport(tmp_path / "source", packages.ValidatedPackage((), {}),
+                                               tmp_path / "prepared", {}, {})
+            if parameter == "activation_preparation":
+                prepared = replace(prepared, preparation_directory=invalid)
+            elif parameter == "activation_source":
+                prepared = replace(prepared, source_directory=invalid)
+            packages.activate_prepared_import(
+                prepared,
+                invalid if parameter == "activation_settings" else tmp_path / "settings.json",
+                invalid if parameter == "activation_library" else tmp_path / "library",
+                invalid if parameter == "activation_recovery" else tmp_path / "recovery")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction API")
