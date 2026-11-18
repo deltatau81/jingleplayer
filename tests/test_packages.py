@@ -734,3 +734,293 @@ def test_export_rejects_windows_junctions(tmp_path, kind):
     assert caught.value.code == "link"
     assert not destination.exists()
     assert_no_staging(tmp_path)
+
+
+def import_fixture(tmp_path):
+    root = write_package(tmp_path / "package")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    return root, staging
+
+
+def test_prepare_export_preserves_all_slots_and_application_state(tmp_path, monkeypatch):
+    settings, sources, package = export_board(tmp_path, ("Grüße.MP3", "music.WAV"))
+    settings["buttons"]["paths"][0] = str(sources[0])
+    exported = packages.export_package_directory(settings, package)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    fake_home = tmp_path / "home"
+    active = fake_home / ".jingleplayer/jingleplayer_settings.json"
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"keep active settings")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: pytest.fail("must not access home")))
+    originals = {p: (p.read_bytes(), p.stat().st_mtime_ns)
+                 for p in (*package.rglob("*"), active, *sources) if p.is_file()}
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    prepared = packages.prepare_package_import(package, staging)
+    assert isinstance(prepared, packages.PreparedImport)
+    assert prepared.source_directory == package
+    assert prepared.preparation_directory.parent == staging
+    assert prepared.source_package == exported
+    assert packages.validate_package_directory(prepared.preparation_directory) == exported
+    assert len(prepared.settings["buttons"]["paths"]) == 50
+    paths = prepared.settings["buttons"]["paths"]
+    assert paths[0] == paths[49] and paths[48] != paths[49]
+    assert len(prepared.audio_paths) == 2
+    for asset in exported.assets:
+        target = prepared.audio_paths[asset.path]
+        assert target.is_absolute() and target.is_relative_to(prepared.preparation_directory)
+        assert hashlib.sha256(target.read_bytes()).hexdigest() == asset.sha256
+        assert target.stat().st_size == asset.size
+    for field in ("window_size", "volume", "fadeout_duration", "button_height"):
+        assert prepared.settings[field] == exported.settings[field]
+    for field in ("texts", "colors", "volumes", "per_row"):
+        assert prepared.settings["buttons"][field] == exported.settings["buttons"][field]
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in originals} == originals
+    prepared.settings["buttons"]["texts"][0] = "detached"
+    assert prepared.source_package.settings["buttons"]["texts"][0] != "detached"
+    assert Path.cwd() == elsewhere
+
+
+def test_prepare_all_fifty_slots(tmp_path):
+    settings, _, root = export_board(tmp_path, tuple(f"{i}.wav" for i in range(50)))
+    packages.export_package_directory(settings, root)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    prepared = packages.prepare_package_import(root, staging)
+    assert len(prepared.audio_paths) == 50
+    assert len(set(prepared.settings["buttons"]["paths"])) == 50
+
+
+def test_prepare_empty_board_and_successive_isolation(tmp_path):
+    manifest, settings = data(())
+    root = write_package(tmp_path / "package", manifest, settings)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    sentinel = staging / "unrelated"
+    sentinel.mkdir()
+    (sentinel / "keep").write_bytes(b"keep")
+    first = packages.prepare_package_import(root, staging)
+    second = packages.prepare_package_import(root, staging)
+    assert first.preparation_directory != second.preparation_directory
+    assert first.audio_paths == second.audio_paths == {}
+    assert first.settings["buttons"]["paths"] == [""] * 50
+    assert packages.validate_package_directory(first.preparation_directory).assets == ()
+    assert (sentinel / "keep").read_bytes() == b"keep"
+
+
+def test_prepare_nested_unicode_and_case_extensions(tmp_path):
+    manifest, settings = data(("Musik/嵐/é.MP3", "Musik/音楽.WAV"))
+    root = write_package(tmp_path / "package", manifest, settings)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    prepared = packages.prepare_package_import(root, staging)
+    assert set(prepared.audio_paths) == {a["path"] for a in manifest["assets"]}
+    assert packages.validate_package_directory(prepared.preparation_directory) == prepared.source_package
+
+
+@pytest.mark.parametrize("kind", ["manifest", "settings", "version", "traversal", "missing", "hash", "size"])
+def test_prepare_rejects_invalid_packages_before_creation(tmp_path, kind):
+    root, staging = import_fixture(tmp_path)
+    if kind in ("manifest", "version", "traversal"):
+        path = root / packages.MANIFEST_NAME
+        value = json.loads(path.read_text())
+        if kind == "manifest":
+            path.write_text("{")
+        else:
+            if kind == "version":
+                value["package_version"] = 2
+            else:
+                value["assets"][0]["path"] = "Musik/../escape.wav"
+            path.write_text(json.dumps(value))
+    elif kind == "settings":
+        path = root / packages.SETTINGS_NAME
+        value = json.loads(path.read_text())
+        value["buttons"]["paths"] = []
+        path.write_text(json.dumps(value))
+    else:
+        asset = root / "Musik/example.wav"
+        if kind == "missing":
+            asset.unlink()
+        else:
+            asset.write_bytes(b"bad" if kind == "hash" else b"longer")
+    with pytest.raises(packages.PackageValidationError):
+        packages.prepare_package_import(root, staging)
+    assert not list(staging.iterdir())
+
+
+@pytest.mark.parametrize("kind", ["relative_source", "relative_staging", "traversal", "inside_source", "same_root", "file"])
+def test_prepare_rejects_unsafe_layouts(tmp_path, kind):
+    root, staging = import_fixture(tmp_path)
+    source_arg, staging_arg = root, staging
+    if kind == "relative_source":
+        source_arg = "package"
+    elif kind == "relative_staging":
+        staging_arg = "staging"
+    elif kind == "traversal":
+        staging_arg = staging / ".." / "staging"
+    elif kind == "inside_source":
+        staging_arg = root / "Musik"
+    elif kind == "same_root":
+        staging_arg = root
+    else:
+        staging_arg = tmp_path / "file"
+        staging_arg.write_bytes(b"keep")
+    with pytest.raises(packages.PackageValidationError):
+        packages.prepare_package_import(source_arg, staging_arg)
+    assert not list(staging.iterdir())
+
+
+@pytest.mark.parametrize("point", ["copy", "partial_copy", "metadata", "prepared_validation"])
+def test_prepare_failure_cleans_only_owned_files(tmp_path, monkeypatch, point):
+    root, staging = import_fixture(tmp_path)
+    sentinel = staging / ".jingleplayer-import-unrelated"
+    sentinel.mkdir()
+    (sentinel / "keep").write_bytes(b"keep")
+    original = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    if point == "copy":
+        monkeypatch.setattr(packages, "_copy_asset", lambda *a, **k: (_ for _ in ()).throw(OSError("copy failed")))
+    elif point == "partial_copy":
+        monkeypatch.setattr(packages.os, "fsync", lambda *a: (_ for _ in ()).throw(OSError("write failed")))
+    elif point == "metadata":
+        write_json = packages._write_export_json
+
+        def fail_metadata(path, contents, **kwargs):
+            write_json(path, contents, **kwargs)
+            raise OSError("metadata failure")
+
+        monkeypatch.setattr(packages, "_write_export_json", fail_metadata)
+    else:
+        validate = packages.validate_package_directory
+
+        def fail_prepared(path):
+            if Path(path).parent == staging:
+                raise packages.PackageValidationError("integrity", str(path), "injected corruption")
+            return validate(path)
+
+        monkeypatch.setattr(packages, "validate_package_directory", fail_prepared)
+    with pytest.raises(packages.PackageValidationError):
+        packages.prepare_package_import(root, staging)
+    assert list(staging.iterdir()) == [sentinel]
+    assert (sentinel / "keep").read_bytes() == b"keep"
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == original
+
+
+@pytest.mark.parametrize("kind", ["before_copy", "during_copy", "copied_file", "metadata_after_copy"])
+def test_prepare_detects_source_and_copy_changes(tmp_path, monkeypatch, kind):
+    root, staging = import_fixture(tmp_path)
+    copy_asset = packages._copy_asset
+    source_file = root / "Musik/example.wav"
+
+    def changed_copy(source, target, before, remaining, **kwargs):
+        if kind == "before_copy":
+            source_file.write_bytes(b"xyz")  # Same size, new manifest mismatch.
+            before = source_file.stat()
+        result = copy_asset(source, target, before, remaining, **kwargs)
+        if kind == "copied_file":
+            target.write_bytes(b"xyz")
+        elif kind == "metadata_after_copy":
+            path = root / packages.SETTINGS_NAME
+            value = json.loads(path.read_text())
+            value["volume"] = 42
+            path.write_text(json.dumps(value))
+        return result
+
+    if kind == "during_copy":
+        fsync = packages.os.fsync
+
+        def mutate(fd):
+            fsync(fd)
+            source_file.write_bytes(b"changed during copy")
+
+        monkeypatch.setattr(packages.os, "fsync", mutate)
+    else:
+        monkeypatch.setattr(packages, "_copy_asset", changed_copy)
+    with pytest.raises(packages.PackageValidationError):
+        packages.prepare_package_import(root, staging)
+    assert not list(staging.iterdir())
+
+
+@pytest.mark.parametrize("limit,value", [("MAX_ASSET_BYTES", 1), ("MAX_TOTAL_BYTES", 1), ("MAX_ASSETS", 0)])
+def test_prepare_enforces_limits(tmp_path, monkeypatch, limit, value):
+    root, staging = import_fixture(tmp_path)
+    monkeypatch.setattr(packages, limit, value)
+    with pytest.raises(packages.PackageValidationError):
+        packages.prepare_package_import(root, staging)
+    assert not list(staging.iterdir())
+
+
+def test_prepare_detects_future_tampering_by_revalidation(tmp_path):
+    root, staging = import_fixture(tmp_path)
+    prepared = packages.prepare_package_import(root, staging)
+    next(iter(prepared.audio_paths.values())).write_bytes(b"bad")
+    with pytest.raises(packages.PackageValidationError, match="SHA-256"):
+        packages.validate_package_directory(prepared.preparation_directory)
+
+
+@pytest.mark.parametrize("kind", ["expected_file", "unexpected_file", "replaced_root"])
+def test_prepare_races_fail_closed_without_deleting_intruder_content(tmp_path, monkeypatch, kind):
+    root, staging = import_fixture(tmp_path)
+    copy_asset = packages._copy_asset
+    saved_root = None
+
+    def racing_copy(source, target, before, remaining, **kwargs):
+        nonlocal saved_root
+        prepared = target.parent.parent
+        if kind == "expected_file":
+            target.write_bytes(b"racing file")
+        elif kind == "unexpected_file":
+            (prepared / "unrelated").write_bytes(b"racing file")
+            raise OSError("injected failure")
+        else:
+            saved_root = staging / "moved-owned-root"
+            prepared.rename(saved_root)
+            prepared.mkdir()
+            (prepared / "unrelated").write_bytes(b"racing file")
+            raise OSError("injected failure")
+        return copy_asset(source, target, before, remaining, **kwargs)
+
+    monkeypatch.setattr(packages, "_copy_asset", racing_copy)
+    with pytest.raises(packages.PackageValidationError) as caught:
+        packages.prepare_package_import(root, staging)
+    assert caught.value.code == "cleanup"
+    assert any(p.read_bytes() == b"racing file" for p in staging.rglob("*") if p.is_file())
+
+
+@pytest.mark.parametrize("kind", ["source_root", "source_asset", "source_directory", "staging"])
+def test_prepare_rejects_symlinks(tmp_path, kind):
+    root, staging = import_fixture(tmp_path)
+    if kind == "source_root":
+        link = tmp_path / "linked-package"
+        symlink_or_skip(link, root, True)
+        root = link
+    elif kind == "staging":
+        link = tmp_path / "linked-staging"
+        symlink_or_skip(link, staging, True)
+        staging = link
+    else:
+        target = root / ("Musik/example.wav" if kind == "source_asset" else "Musik")
+        outside = tmp_path / "outside"
+        target.rename(outside)
+        symlink_or_skip(target, outside, kind == "source_directory")
+    with pytest.raises(packages.PackageValidationError):
+        packages.prepare_package_import(root, staging)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction API")
+@pytest.mark.parametrize("kind", ["source", "staging"])
+def test_prepare_rejects_windows_junctions(tmp_path, kind):
+    root, staging = import_fixture(tmp_path)
+    link = tmp_path / "junction"
+    original = root if kind == "source" else staging
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(original)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        pytest.skip(f"junction creation unavailable: {result.stderr}")
+    with pytest.raises(packages.PackageValidationError) as caught:
+        packages.prepare_package_import(link if kind == "source" else root,
+                                        link if kind == "staging" else staging)
+    assert caught.value.code == "link"
+    assert not list(staging.iterdir())

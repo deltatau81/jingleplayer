@@ -1,4 +1,4 @@
-"""Portable directory package validation and export, version 1 (stdlib only).
+"""Portable directory package validation, export and preparation (stdlib only).
 
 Root contains exactly jingleplayer_package.json, jingleplayer_settings.json and
 optionally Musik/ (required by nonempty assignments). No unrelated files or
@@ -37,7 +37,9 @@ It hashes in chunks and checks file identity/size/timestamps around reads.
 This is not an OS sandbox against a concurrent hostile process replacing parent
 directories; callers must inspect a stable package, not concurrently mutate it.
 Validators never write. Export writes only its own staging directory and publishes
-it to a new destination. No logic/GUI modules or application state are accessed.
+it to a new destination. Import preparation retains an isolated verified copy for
+later activation; it never installs into a library or updates application state.
+No logic/GUI modules or application state are accessed.
 """
 
 from copy import deepcopy
@@ -86,6 +88,29 @@ class ValidatedPackage:
 
     assets: tuple[Asset, ...]
     settings: dict
+
+
+@dataclass(frozen=True)
+class PreparedImport:
+    """Non-activated import result, with detached (caller-mutable) snapshots.
+
+    source_package contains manifest Asset records and package-relative settings.
+    preparation_directory is an operation-owned, still-valid directory package.
+    settings has all 50 slots with native absolute paths to those verified files;
+    audio_paths maps each original portable reference to its prepared Path.
+    source_directory is provenance only, never needed for later playback.
+
+    Phase 17E must revalidate preparation_directory with
+    validate_package_directory, compare against source_package, and rebuild its
+    paths if assets move. Neither these dictionaries nor on-disk files constitute
+    an authorization to activate. Window size/global volume remain package values.
+    """
+
+    source_directory: Path
+    source_package: ValidatedPackage
+    preparation_directory: Path
+    settings: dict
+    audio_paths: dict[str, Path]
 
 
 def _require(condition, code, location, message):
@@ -345,7 +370,7 @@ def _source_path(value, base):
     return path.resolve(), info
 
 
-def _copy_asset(source, target, before, remaining):
+def _copy_asset(source, target, before, remaining, *, on_created=None):
     """Exclusive streamed copy, detecting source replacement/growth/modification."""
     _check_directory_chain(source.parent)
     _require(_identity(_safe_stat(source)) == _identity(before),
@@ -353,6 +378,8 @@ def _copy_asset(source, target, before, remaining):
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     digest, count = hashlib.sha256(), 0
     with os.fdopen(os.open(source, flags), "rb") as incoming, target.open("xb") as outgoing:
+        if on_created is not None:
+            on_created(target, os.fstat(outgoing.fileno()))
         _require(_identity(os.fstat(incoming.fileno())) == _identity(before),
                  "changed", str(source), "source replaced before copying")
         while True:
@@ -402,11 +429,13 @@ def _publish_directory(staging, destination):
         raise OSError(number, os.strerror(number), str(destination))
 
 
-def _write_export_json(path, value):
+def _write_export_json(path, value, *, on_created=None):
     encoded = (json.dumps(value, ensure_ascii=False, allow_nan=False,
                           sort_keys=True, indent=2) + "\n").encode("utf-8")
     _require(len(encoded) <= MAX_JSON_BYTES, "limit", path.name, "JSON byte limit exceeded")
     with path.open("xb") as stream:
+        if on_created is not None:
+            on_created(path, os.fstat(stream.fileno()))
         stream.write(encoded)
         stream.flush()
         os.fsync(stream.fileno())
@@ -502,3 +531,167 @@ def export_package_directory(settings, destination, *, source_base=None):
     finally:
         if staging is not None:
             shutil.rmtree(staging)
+
+
+def _preparation_path(value, location):
+    path = Path(value)
+    _require(path.is_absolute() and ".." not in path.parts,
+             "path", location, "expected absolute native path without parent traversal")
+    _check_directory_chain(path)
+    return path
+
+
+def _directory_identity(path):
+    info = _safe_stat(path, directory=True)
+    return info.st_dev, info.st_ino
+
+
+def _check_preparation_owner(root, owner):
+    _check_directory_chain(root)
+    _require(_directory_identity(root) == owner, "ownership", str(root),
+             "preparation directory replaced; refusing access or cleanup")
+
+
+def _cleanup_preparation(root, owner, created):
+    """Fail closed on replacement, links, or unexpected content; no broad rmtree."""
+    _check_preparation_owner(root, owner)
+    files, directories = [], []
+
+    def inspect(directory):
+        for child in directory.iterdir():
+            relative = child.relative_to(root).as_posix()
+            info = child.lstat()
+            is_directory = stat.S_ISDIR(info.st_mode)
+            info = _safe_stat(child, directory=is_directory)
+            _require(created.get(relative) == (info.st_dev, info.st_ino, is_directory),
+                     "ownership", str(child), "unexpected entry; refusing cleanup")
+            if is_directory:
+                inspect(child)
+                directories.append(child)
+            else:
+                files.append(child)
+
+    inspect(root)
+    for path in files:
+        _check_preparation_owner(root, owner)
+        _check_directory_chain(path.parent)
+        info = _safe_stat(path)
+        _require(created.get(path.relative_to(root).as_posix()) == (info.st_dev, info.st_ino, False),
+                 "ownership", str(path), "file replaced; refusing cleanup")
+        path.unlink()
+    for path in directories:
+        _check_preparation_owner(root, owner)
+        _check_directory_chain(path)
+        info = _safe_stat(path, directory=True)
+        _require(created.get(path.relative_to(root).as_posix()) == (info.st_dev, info.st_ino, True),
+                 "ownership", str(path), "directory replaced; refusing cleanup")
+        path.rmdir()
+    _check_preparation_owner(root, owner)
+    root.rmdir()
+
+
+def prepare_package_import(package_directory, staging_root):
+    """Validate/copy a package into isolation; return PreparedImport, never activate.
+
+    Both arguments must be explicit absolute existing directories without '..',
+    symlinks or reparse points anywhere in their ancestry. staging_root must not
+    equal or lie inside the source package. No CWD/home/settings are consulted.
+    A unique private .jingleplayer-import-* directory (mkdtemp) is retained on
+    success. Existing staging content is never merged, overwritten or removed.
+
+    The entire source is validated before any creation. Copies reuse streamed
+    size/hash/mutation checks, additionally compare against the initial manifest,
+    then revalidate both the prepared package and source snapshot before return.
+    Original relative metadata is retained on disk for subsequent revalidation;
+    only the returned settings copy maps assignments to native absolute files.
+
+    Failure raises PackageValidationError and cleans only the operation's known
+    paths after verifying its root identity and checking for unexpected entries.
+    Unsafe replacement/content or a cleanup I/O error fails closed, leaves the
+    directory for inspection and reports its location with code 'cleanup'.
+    No marker is inserted, preserving the exact version-1 package contract.
+
+    This is preparation, not atomic activation or crash-durable installation.
+    Restrictive creation permissions and repeated no-link/identity/hash checks
+    detect ordinary races. As with the existing validators/exporter, callers must
+    control staging_root and keep ancestors stable: path-based stdlib checks are
+    not an OS sandbox against a hostile same-user process swapping directories
+    between a check and an open/unlink. Concurrent source edits cause failure if
+    observed; edits after the final check cannot invalidate the independent copy.
+    Phase 17E must revalidate the retained directory immediately before use.
+    """
+    prepared, owner = None, None
+    created, allowed_dirs = {}, {"Musik"}
+    try:
+        source = _preparation_path(package_directory, "package_directory")
+        staging = _preparation_path(staging_root, "staging_root")
+        _require(not staging.resolve().is_relative_to(source.resolve()),
+                 "layout", str(staging), "staging_root must be outside source package")
+        validated = validate_package_directory(source)
+        # Respect configured limits even if they are tightened by a caller/test.
+        _require(len(validated.assets) <= MAX_ASSETS, "limit", "assets", "asset count exceeded")
+        _require(sum(a.size for a in validated.assets) <= MAX_TOTAL_BYTES,
+                 "limit", "assets", "total byte limit exceeded")
+        for asset in validated.assets:
+            parts = asset.path.split("/")
+            allowed_dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
+        staging_owner = _directory_identity(staging)
+        _check_directory_chain(staging)
+        prepared = Path(tempfile.mkdtemp(prefix=".jingleplayer-import-", dir=staging))
+        owner = _directory_identity(prepared)
+
+        def record_creation(path, info):
+            created[path.relative_to(prepared).as_posix()] = (
+                info.st_dev, info.st_ino, stat.S_ISDIR(info.st_mode))
+
+        _require(_directory_identity(staging) == staging_owner,
+                 "ownership", str(staging), "staging_root changed during creation")
+        for relative in sorted(allowed_dirs, key=lambda p: (p.count("/"), p)):
+            _check_preparation_owner(prepared, owner)
+            target = prepared.joinpath(*relative.split("/"))
+            _check_directory_chain(target.parent)
+            target.mkdir()  # Exclusive creation; no merging with a racing entry.
+            record_creation(target, _safe_stat(target, directory=True))
+        total, mapping = 0, {}
+        for asset in validated.assets:
+            _check_preparation_owner(prepared, owner)
+            incoming = source.joinpath(*asset.path.split("/"))
+            target = prepared.joinpath(*asset.path.split("/"))
+            _check_directory_chain(incoming.parent)
+            _check_directory_chain(target.parent)
+            before = _safe_stat(incoming)
+            _require(before.st_size == asset.size and before.st_size <= MAX_ASSET_BYTES,
+                     "size", asset.path, "source size changed or limit exceeded")
+            size, digest = _copy_asset(incoming, target, before, MAX_TOTAL_BYTES - total,
+                                       on_created=record_creation)
+            _require(size == asset.size and digest == asset.sha256,
+                     "integrity", asset.path, "copied bytes differ from validated manifest")
+            total += size
+            mapping[asset.path] = target
+        manifest = {"package_version": PACKAGE_VERSION, "assets": [
+            {"path": a.path, "size": a.size, "sha256": a.sha256} for a in validated.assets]}
+        for name, contents in ((MANIFEST_NAME, manifest), (SETTINGS_NAME, validated.settings)):
+            _check_preparation_owner(prepared, owner)
+            _write_export_json(prepared / name, contents, on_created=record_creation)
+        _check_preparation_owner(prepared, owner)
+        _require(validate_package_directory(prepared) == validated,
+                 "integrity", str(prepared), "prepared snapshot differs from source")
+        _require(validate_package_directory(source) == validated,
+                 "changed", str(source), "source package changed during preparation")
+        _check_preparation_owner(prepared, owner)
+        settings = deepcopy(validated.settings)
+        settings["buttons"]["paths"] = [str(mapping[p]) if p else ""
+                                            for p in settings["buttons"]["paths"]]
+        result = PreparedImport(source, validated, prepared, settings, mapping)
+        prepared = None  # Transfer ownership to the caller; no activation.
+        return result
+    except (OSError, TypeError, ValueError, RecursionError) as error:
+        if prepared is not None:
+            try:
+                _cleanup_preparation(prepared, owner, created)
+            except (OSError, ValueError) as cleanup_error:
+                raise PackageValidationError("cleanup", str(prepared),
+                                             f"preparation failed ({error}); cleanup refused/failed: {cleanup_error}") from error
+        if isinstance(error, PackageValidationError):
+            raise
+        raise PackageValidationError("preparation", str(package_directory), str(error)) from error
