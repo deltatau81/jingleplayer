@@ -346,3 +346,391 @@ def test_reparse_flag_check_on_any_host(tmp_path, monkeypatch):
     with pytest.raises(packages.PackageValidationError) as caught:
         packages._safe_stat(path)
     assert caught.value.code == "link"
+
+
+def export_board(tmp_path, names=("source.wav",)):
+    settings = board()
+    sources = []
+    for index, name in enumerate(names):
+        source = tmp_path / name
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"audio-" + str(index).encode())
+        settings["buttons"]["paths"][49 - index] = str(source)
+        sources.append(source)
+    return settings, sources, tmp_path / "exported"
+
+
+def assert_no_staging(parent):
+    assert not list(parent.glob(".jingleplayer-export-*"))
+
+
+def test_export_success_preserves_all_slots_sources_and_local_settings(tmp_path, monkeypatch):
+    settings, sources, destination = export_board(tmp_path, ("audio with spaces.WAV", "嵐.MP3"))
+    settings["last_folder"] = str(tmp_path / "private-folder")
+    settings["buttons"]["paths"][0] = str(sources[0])
+    settings["buttons"]["texts"] = [f"slot {i}" for i in range(50)]
+    settings["buttons"]["volumes"] = [-10, 10] * 25
+    settings["buttons"]["colors"] = ["#123456"] * 50
+    snapshot = deepcopy(settings)
+    # Redirect the home of any accidental active-settings access to a sentinel.
+    fake_home = tmp_path / "home"
+    active = fake_home / ".jingleplayer/jingleplayer_settings.json"
+    active.parent.mkdir(parents=True)
+    active.write_bytes(b"active settings must remain untouched")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in (*sources, active)}
+    elsewhere = tmp_path / "unrelated"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    result = packages.export_package_directory(settings, destination)
+    assert result == packages.validate_package_directory(destination)
+    assert settings == snapshot
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
+    assert "last_folder" not in result.settings
+    for key in ("window_size", "volume", "fadeout_duration", "button_height", "schema_version"):
+        assert result.settings[key] == snapshot[key]
+    for key in ("texts", "colors", "volumes", "per_row"):
+        assert result.settings["buttons"][key] == snapshot["buttons"][key]
+    paths = result.settings["buttons"]["paths"]
+    assert paths[0] == paths[49] and paths[48] != paths[49]
+    assert len(result.assets) == 2 and len(paths) == 50
+    assert all(not paths[i] for i in range(1, 48))
+    assert_no_staging(tmp_path)
+
+
+def test_export_empty_board(tmp_path):
+    destination = tmp_path / "empty"
+    result = packages.export_package_directory(board(), destination)
+    assert result.assets == ()
+    assert (destination / "Musik").is_dir()
+    assert packages.validate_package_directory(destination) == result
+
+
+def test_export_fifty_distinct_hidden_and_visible_assets(tmp_path):
+    settings, _, destination = export_board(tmp_path, tuple(f"{i}.wav" for i in range(50)))
+    result = packages.export_package_directory(settings, destination)
+    assert len(result.assets) == 50
+    assert len(set(result.settings["buttons"]["paths"])) == 50
+
+
+def test_export_names_portable_collision_free_and_deterministic(tmp_path):
+    # Separate folders allow these sources on case-insensitive/normalizing hosts.
+    settings, _, destination = export_board(tmp_path, (
+        "a/same.wav", "b/same.wav", "c/SAME.WAV", "d/é.wav", "e/e\u0301.wav"))
+    first = packages.export_package_directory(settings, destination)
+    second_destination = tmp_path / "second"
+    second = packages.export_package_directory(settings, second_destination)
+    assert first == second
+    assert len({packages._collision_key(a.path) for a in first.assets}) == 5
+    for name in (packages.MANIFEST_NAME, packages.SETTINGS_NAME):
+        assert (destination / name).read_bytes() == (second_destination / name).read_bytes()
+    for asset in first.assets:
+        assert packages.validate_asset_path(asset.path) == asset.path
+        assert len(asset.path) < 40
+
+
+@pytest.mark.parametrize("basename", ["CON.wav", "NUL.mp3", "a?.wav", "a:b.wav", "trailing .wav"])
+def test_unsafe_source_basenames_generate_safe_names(tmp_path, monkeypatch, basename):
+    settings, sources, destination = export_board(tmp_path)
+    # Such names cannot be created on Windows; simulate only canonical naming.
+    source_path = packages._source_path
+
+    def unsafe_name(value, base):
+        source, info = source_path(value, base)
+        return source.with_name(basename), info
+
+    copy_asset = packages._copy_asset
+
+    def copy_original(source, target, before, remaining):
+        return copy_asset(sources[0], target, before, remaining)
+
+    monkeypatch.setattr(packages, "_source_path", unsafe_name)
+    monkeypatch.setattr(packages, "_copy_asset", copy_original)
+    result = packages.export_package_directory(settings, destination)
+    assert result.assets[0].path == "Musik/asset-001" + Path(basename).suffix.lower()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows cannot create these source basenames")
+def test_actual_unsafe_source_basenames_on_posix(tmp_path):
+    settings, _, destination = export_board(tmp_path, ("CON.wav", "bad?.mp3", "a:b.wav"))
+    assert len(packages.export_package_directory(settings, destination).assets) == 3
+
+
+def test_explicit_relative_base_and_no_cwd_dependency(tmp_path, monkeypatch):
+    settings, sources, destination = export_board(tmp_path)
+    settings["buttons"]["paths"][49] = sources[0].name
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    with pytest.raises(packages.PackageValidationError, match="source_base"):
+        packages.export_package_directory(settings, destination)
+    result = packages.export_package_directory(settings, destination, source_base=tmp_path)
+    assert len(result.assets) == 1
+    assert Path.cwd() == elsewhere
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "unsupported", "unreadable", "traversal"])
+def test_export_invalid_source_rolls_back(tmp_path, monkeypatch, kind):
+    settings, sources, destination = export_board(tmp_path)
+    source = sources[0]
+    if kind == "missing":
+        source.unlink()
+    elif kind == "directory":
+        source.unlink()
+        source.mkdir()
+    elif kind == "unsupported":
+        new = source.with_suffix(".ogg")
+        source.rename(new)
+        settings["buttons"]["paths"][49] = str(new)
+    elif kind == "traversal":
+        settings["buttons"]["paths"][49] = str(tmp_path / "other" / ".." / source.name)
+    else:
+        original_open = packages.os.open
+
+        def denied(path, flags, *args, **kwargs):
+            if Path(path) == source:
+                raise PermissionError("source unreadable")
+            return original_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(packages.os, "open", denied)
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert not destination.exists()
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("field,value", [("volume", 101), ("schema_version", 3),
+                                         ("last_folder", None), ("unknown_path", "secret")])
+def test_export_invalid_settings_rejected_before_copy(tmp_path, monkeypatch, field, value):
+    settings, _, destination = export_board(tmp_path)
+    settings[field] = value
+    monkeypatch.setattr(packages, "_copy_asset", lambda *args: pytest.fail("must not copy"))
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert not destination.exists()
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("limit,value", [("MAX_ASSET_BYTES", 1), ("MAX_TOTAL_BYTES", 1), ("MAX_ASSETS", 0),
+                                       ("MAX_JSON_BYTES", 10)])
+def test_export_limits_before_copy(tmp_path, monkeypatch, limit, value):
+    settings, _, destination = export_board(tmp_path)
+    monkeypatch.setattr(packages, limit, value)
+    monkeypatch.setattr(packages, "_copy_asset", lambda *args: pytest.fail("must not copy"))
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["empty_directory", "file", "populated_directory"])
+def test_export_existing_destination_never_overwritten(tmp_path, kind):
+    settings, _, destination = export_board(tmp_path)
+    if kind == "file":
+        destination.write_bytes(b"unrelated")
+    else:
+        destination.mkdir()
+        if kind == "populated_directory":
+            (destination / "keep").write_bytes(b"unrelated")
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert destination.exists()
+    if kind == "file":
+        assert destination.read_bytes() == b"unrelated"
+    elif kind == "populated_directory":
+        assert (destination / "keep").read_bytes() == b"unrelated"
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_export_destination_race_no_replace(tmp_path, monkeypatch, kind):
+    settings, _, destination = export_board(tmp_path)
+    publish = packages._publish_directory
+
+    def race(staging, target):
+        if kind == "directory":
+            target.mkdir()  # Even empty directories must never be overwritten.
+        else:
+            target.write_bytes(b"racing writer")
+        return publish(staging, target)
+
+    monkeypatch.setattr(packages, "_publish_directory", race)
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert destination.exists()
+    if kind == "directory":
+        assert not list(destination.iterdir())
+    else:
+        assert destination.read_bytes() == b"racing writer"
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("stage", ["copy", "write_json", "validation", "publication"])
+def test_export_failures_cleanup_only_owned_staging(tmp_path, monkeypatch, stage):
+    settings, sources, destination = export_board(tmp_path, ("a.wav", "b.mp3"))
+    unrelated = tmp_path / ".jingleplayer-export-unrelated"
+    unrelated.mkdir()
+    (unrelated / "keep").write_bytes(b"unrelated")
+    original = {p: p.read_bytes() for p in sources}
+    if stage == "copy":
+        copy_asset = packages._copy_asset
+
+        def fail_copy(source, target, *args):
+            if source == sources[0]:
+                raise OSError("copy failure")
+            return copy_asset(source, target, *args)
+
+        monkeypatch.setattr(packages, "_copy_asset", fail_copy)
+    else:
+        function = {"write_json": "_write_export_json", "validation": "validate_package_directory",
+                    "publication": "_publish_directory"}[stage]
+
+        def fail(*args):
+            raise OSError("injected failure")
+
+        monkeypatch.setattr(packages, function, fail)
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert not destination.exists()
+    assert {p: p.read_bytes() for p in sources} == original
+    assert list(tmp_path.glob(".jingleplayer-export-*")) == [unrelated]
+    assert (unrelated / "keep").read_bytes() == b"unrelated"
+
+
+def test_export_source_mutation_during_streaming(tmp_path, monkeypatch):
+    settings, sources, destination = export_board(tmp_path)
+    original_fsync = packages.os.fsync
+
+    def mutate(fd):
+        original_fsync(fd)
+        sources[0].write_bytes(b"changed during copy")
+
+    monkeypatch.setattr(packages.os, "fsync", mutate)
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert not destination.exists()
+    assert_no_staging(tmp_path)
+
+
+def test_export_changed_copied_bytes_fail_staging_verification(tmp_path, monkeypatch):
+    settings, _, destination = export_board(tmp_path)
+    copy_asset = packages._copy_asset
+
+    def corrupt(source, target, before, remaining):
+        result = copy_asset(source, target, before, remaining)
+        target.write_bytes(b"x" * result[0])
+        return result
+
+    monkeypatch.setattr(packages, "_copy_asset", corrupt)
+    with pytest.raises(packages.PackageValidationError, match="SHA-256"):
+        packages.export_package_directory(settings, destination)
+    assert not destination.exists()
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["source", "ancestor", "destination"])
+def test_export_rejects_symlinks(tmp_path, kind):
+    settings, sources, destination = export_board(tmp_path)
+    if kind == "source":
+        link = tmp_path / "linked.wav"
+        symlink_or_skip(link, sources[0])
+        settings["buttons"]["paths"][49] = str(link)
+    elif kind == "ancestor":
+        link = tmp_path / "linked"
+        symlink_or_skip(link, tmp_path, True)
+        settings["buttons"]["paths"][49] = str(link / sources[0].name)
+    else:
+        symlink_or_skip(destination, tmp_path / "nonexistent", True)
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert_no_staging(tmp_path)
+
+
+def test_export_deduplicates_hardlinks(tmp_path):
+    settings, sources, destination = export_board(tmp_path)
+    alias = tmp_path / "alias.wav"
+    try:
+        os.link(sources[0], alias)
+    except OSError as error:
+        pytest.skip(f"hard links unavailable: {error}")
+    settings["buttons"]["paths"][0] = str(alias)
+    assert len(packages.export_package_directory(settings, destination).assets) == 1
+
+
+def test_export_module_has_no_application_imports():
+    import ast
+    tree = ast.parse(Path(packages.__file__).read_text(encoding="utf-8"))
+    modules = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            modules.append(node.module)
+    assert not any(name.startswith(("PySide6", "pygame", "jingleplayer_logic", "jingleplayer_gui"))
+                   for name in modules)
+
+
+def test_export_staging_validated_before_atomic_publication(tmp_path, monkeypatch):
+    settings, _, destination = export_board(tmp_path)
+    publish = packages._publish_directory
+
+    def inspect_publication(staging, target):
+        assert staging.parent == target.parent
+        assert not target.exists()
+        assert len(packages.validate_package_directory(staging).assets) == 1
+        publish(staging, target)
+
+    monkeypatch.setattr(packages, "_publish_directory", inspect_publication)
+    packages.export_package_directory(settings, destination)
+
+
+def test_export_detects_same_size_mutation_with_restored_mtime(tmp_path, monkeypatch):
+    settings, sources, destination = export_board(tmp_path)
+    source = sources[0]
+    before = source.stat()
+    original_fsync = packages.os.fsync
+
+    def mutate(fd):
+        original_fsync(fd)
+        source.write_bytes(b"x" * before.st_size)
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    monkeypatch.setattr(packages.os, "fsync", mutate)
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination)
+    assert not destination.exists()
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.parametrize("kind", ["relative_destination", "relative_base", "invalid_destination"])
+def test_export_rejects_ambiguous_or_invalid_api_paths(tmp_path, kind):
+    settings, _, destination = export_board(tmp_path)
+    kwargs = {}
+    if kind == "relative_destination":
+        destination = "relative-export"
+    elif kind == "relative_base":
+        kwargs["source_base"] = "relative-base"
+    else:
+        destination = str(destination) + "\0"
+    with pytest.raises(packages.PackageValidationError):
+        packages.export_package_directory(settings, destination, **kwargs)
+    assert_no_staging(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction API")
+@pytest.mark.parametrize("kind", ["source", "destination_parent"])
+def test_export_rejects_windows_junctions(tmp_path, kind):
+    settings, sources, destination = export_board(tmp_path)
+    link = tmp_path / "junction"
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(tmp_path)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        pytest.skip(f"junction creation unavailable: {result.stderr}")
+    if kind == "source":
+        settings["buttons"]["paths"][49] = str(link / sources[0].name)
+    else:
+        destination = link / "exported"
+    with pytest.raises(packages.PackageValidationError) as caught:
+        packages.export_package_directory(settings, destination)
+    assert caught.value.code == "link"
+    assert not destination.exists()
+    assert_no_staging(tmp_path)

@@ -1,4 +1,4 @@
-"""Read-only portable directory package contract, version 1 (stdlib only).
+"""Portable directory package validation and export, version 1 (stdlib only).
 
 Root contains exactly jingleplayer_package.json, jingleplayer_settings.json and
 optionally Musik/ (required by nonempty assignments). No unrelated files or
@@ -36,16 +36,22 @@ assets and intermediate directories; only regular files/directories are read.
 It hashes in chunks and checks file identity/size/timestamps around reads.
 This is not an OS sandbox against a concurrent hostile process replacing parent
 directories; callers must inspect a stable package, not concurrently mutate it.
-No logic/GUI modules are imported and no settings, files or global state written.
+Validators never write. Export writes only its own staging directory and publishes
+it to a new destination. No logic/GUI modules or application state are accessed.
 """
 
+from copy import deepcopy
 from dataclasses import dataclass
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import shutil
+import sys
+import tempfile
 import unicodedata
 
 PACKAGE_VERSION = 1
@@ -316,3 +322,183 @@ def validate_package_directory(root):
         return package
     except OSError as error:
         raise PackageValidationError("filesystem", str(root), str(error)) from error
+
+
+def _check_directory_chain(path):
+    for parent in reversed((path, *path.parents)):
+        _safe_stat(parent, directory=True)
+
+
+def _source_path(value, base):
+    _require(type(value) is str and bool(value) and "\0" not in value,
+             "source", "buttons.paths", "expected nonempty source path string")
+    path = Path(value)
+    _require(".." not in path.parts, "source", value, "parent traversal forbidden")
+    if not path.is_absolute():
+        _require(base is not None and not path.drive and not path.root,
+                 "source", value, "relative sources require explicit source_base")
+        path = base / path
+    _check_directory_chain(path.parent)
+    info = _safe_stat(path)
+    _require(path.suffix.lower() in (".mp3", ".wav"),
+             "extension", str(path), "expected MP3 or WAV source")
+    return path.resolve(), info
+
+
+def _copy_asset(source, target, before, remaining):
+    """Exclusive streamed copy, detecting source replacement/growth/modification."""
+    _check_directory_chain(source.parent)
+    _require(_identity(_safe_stat(source)) == _identity(before),
+             "changed", str(source), "source changed before copying")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    digest, count = hashlib.sha256(), 0
+    with os.fdopen(os.open(source, flags), "rb") as incoming, target.open("xb") as outgoing:
+        _require(_identity(os.fstat(incoming.fileno())) == _identity(before),
+                 "changed", str(source), "source replaced before copying")
+        while True:
+            chunk = incoming.read(HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            count += len(chunk)
+            _require(count <= min(MAX_ASSET_BYTES, remaining, before.st_size),
+                     "limit", str(source), "source grew or byte limit exceeded")
+            outgoing.write(chunk)
+            digest.update(chunk)
+        outgoing.flush()
+        os.fsync(outgoing.fileno())
+        _require(count == before.st_size and
+                 _identity(os.fstat(incoming.fileno())) == _identity(before) and
+                 _identity(_safe_stat(source)) == _identity(before),
+                 "changed", str(source), "source changed during copying")
+    # Independent source reread also detects mutations that preserve size/mtime.
+    _check_directory_chain(source.parent)
+    verified_size, verified_digest = _read_file(source, before.st_size, digest=True)
+    _require(verified_size == count and verified_digest == digest.hexdigest(),
+             "changed", str(source), "source verification failed")
+    return count, digest.hexdigest()
+
+
+def _publish_directory(staging, destination):
+    """Atomic no-replace rename. Fail closed on unsupported OS/filesystem APIs."""
+    if os.name == "nt":
+        # Windows rename fails when any destination entry already exists.
+        os.rename(staging, destination)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        rename = libc.renameat2
+        rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        result = rename(-100, os.fsencode(staging), -100, os.fsencode(destination), 1)
+    elif sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        result = rename(os.fsencode(staging), os.fsencode(destination), 4)  # RENAME_EXCL
+    else:
+        raise PackageValidationError("publication", str(destination), "atomic no-replace rename unavailable")
+    if result:
+        number = ctypes.get_errno()
+        raise OSError(number, os.strerror(number), str(destination))
+
+
+def _write_export_json(path, value):
+    encoded = (json.dumps(value, ensure_ascii=False, allow_nan=False,
+                          sort_keys=True, indent=2) + "\n").encode("utf-8")
+    _require(len(encoded) <= MAX_JSON_BYTES, "limit", path.name, "JSON byte limit exceeded")
+    with path.open("xb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def export_package_directory(settings, destination, *, source_base=None):
+    """Export a supplied snapshot; return its detached ValidatedPackage.
+
+    Destination and optional source_base must be absolute native paths with no
+    parent-traversal components. Destination's parent must already exist. Relative
+    audio paths require source_base (explicitly pass the playback CWD to preserve
+    legacy playback semantics). Never reads active settings or changes CWD.
+
+    All source ancestry must be free of symlinks/reparse points. Canonical paths
+    and hard-link identities deduplicate sources; asset-001.wav etc. are assigned
+    by first slot occurrence, not source basename. Short ASCII names avoid case,
+    Unicode, reserved-name and component-length collisions without leaking paths.
+    The caller controls the full destination path length; OS path-limit failures
+    roll back staging. last_folder is omitted after checking it is a string.
+    All other Phase 17B settings checks apply unchanged, including unknown keys.
+
+    Raises PackageValidationError for validation or filesystem failures. A unique
+    sibling staging directory is validated and atomically renamed without replace
+    (Windows rename, Linux renameat2, macOS renamex_np). Unsupported publication
+    APIs/filesystems fail closed. Existing/racing destinations are never merged or
+    removed. Only this operation's staging is cleaned on failure. Parent directories
+    must be stable/trusted: path-based checks are not a sandbox against concurrent
+    hostile parent replacement. Atomic visibility does not promise crash durability.
+    """
+    staging = None
+    try:
+        destination = Path(destination)
+        _require(destination.is_absolute() and ".." not in destination.parts and
+                 destination.name not in ("", ".", ".."),
+                 "destination", str(destination), "expected absolute destination without traversal")
+        _check_directory_chain(destination.parent)
+        _require(not os.path.lexists(destination), "destination", str(destination), "destination already exists")
+        base = None
+        if source_base is not None:
+            base = Path(source_base)
+            _require(base.is_absolute() and ".." not in base.parts,
+                     "source", str(base), "expected absolute source_base without traversal")
+            _check_directory_chain(base)
+        snapshot = deepcopy(settings)
+        _require(type(snapshot) is dict, "type", "settings", "expected JSON object")
+        if "last_folder" in snapshot:
+            _require(type(snapshot["last_folder"]) is str, "type", "last_folder", "expected string")
+            snapshot.pop("last_folder")
+        buttons = snapshot.get("buttons")
+        _require(type(buttons) is dict and type(buttons.get("paths")) is list and
+                 len(buttons["paths"]) == 50, "slots", "buttons.paths", "expected exactly 50 paths")
+        original_paths = buttons["paths"]
+        _require(all(type(p) is str for p in original_paths), "type", "buttons.paths", "expected strings")
+        buttons["paths"] = [""] * 50
+        # Validate all non-path settings before reading source files or staging.
+        validate_package_data({"package_version": PACKAGE_VERSION, "assets": []}, snapshot)
+        sources, identities, declared_total = [], {}, 0
+        for index, value in enumerate(original_paths):
+            if not value:
+                continue
+            source, info = _source_path(value, base)
+            identity = (info.st_dev, info.st_ino) if info.st_ino else os.path.normcase(str(source))
+            if identity not in identities:
+                _require(len(sources) < MAX_ASSETS, "limit", "assets", "asset count exceeded")
+                _require(info.st_size <= MAX_ASSET_BYTES, "limit", str(source), "asset byte limit exceeded")
+                declared_total += info.st_size
+                _require(declared_total <= MAX_TOTAL_BYTES, "limit", "assets", "total byte limit exceeded")
+                name = validate_asset_path(f"Musik/asset-{len(sources) + 1:03d}{source.suffix.lower()}")
+                identities[identity] = name
+                sources.append((source, info, name))
+            buttons["paths"][index] = identities[identity]
+        staging = Path(tempfile.mkdtemp(prefix=".jingleplayer-export-", dir=destination.parent))
+        (staging / "Musik").mkdir()
+        entries, copied_total = [], 0
+        for source, info, name in sources:
+            count, digest = _copy_asset(source, staging.joinpath(*name.split("/")), info,
+                                        MAX_TOTAL_BYTES - copied_total)
+            copied_total += count
+            entries.append({"path": name, "size": count, "sha256": digest})
+        manifest = {"package_version": PACKAGE_VERSION, "assets": entries}
+        validate_package_data(manifest, snapshot)
+        _write_export_json(staging / MANIFEST_NAME, manifest)
+        _write_export_json(staging / SETTINGS_NAME, snapshot)
+        validated = validate_package_directory(staging)
+        _check_directory_chain(destination.parent)
+        _publish_directory(staging, destination)
+        staging = None
+        return validated
+    except PackageValidationError:
+        raise
+    except (OSError, TypeError, ValueError, RecursionError) as error:
+        raise PackageValidationError("export", str(destination), str(error)) from error
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging)
