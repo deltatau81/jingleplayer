@@ -1,10 +1,11 @@
 """Minimal parallel PySide6 entry point for Jingleplayer."""
 
 import sys
+import stat
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtCore import QThread, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QColorDialog,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -29,10 +31,27 @@ from PySide6.QtWidgets import (
 )
 
 import jingleplayer_logic
+import jingleplayer_packages
 
 MAX_FADEOUT_DURATION_MS = 2_147_483_647
 MIN_BUTTON_HEIGHT = 1
 MAX_BUTTON_HEIGHT = 10
+
+
+class PackageJob(QThread):
+    """Filesystem work only; results are handled via finished on the GUI thread."""
+
+    def __init__(self, work, parent):
+        super().__init__(parent)
+        self.work = work
+        self.result = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.result = self.work()
+        except Exception as error:
+            self.error = error
 
 
 def resource_path(relative_path):
@@ -324,6 +343,12 @@ class JingleplayerMainWindow(QMainWindow):
     def __init__(self, current_settings):
         super().__init__()
         self.setWindowTitle("Jingleplayer")
+        self._package_busy = False
+        self._settings_writes_blocked = False
+        self._restart_required = False
+        self._package_job = None
+        self._package_progress = None
+        self._prepared_path = None
 
         window_size = current_settings["window_size"]
         self._persisted_window_size = (int(window_size[0]), int(window_size[1]))
@@ -351,6 +376,283 @@ class JingleplayerMainWindow(QMainWindow):
         self.sound_end_timer.setInterval(jingleplayer_logic.FADEOUT_CHECK_INTERVAL_MS)
         self.sound_end_timer.timeout.connect(self._poll_sound_end)
         self.sound_end_timer.start()
+        package_menu = self.menuBar().addMenu("Soundboard")
+        self.export_action = QAction("Soundboard exportieren...", self)
+        self.import_action = QAction("Soundboard importieren...", self)
+        package_menu.addActions([self.export_action, self.import_action])
+        self.export_action.triggered.connect(self._export_soundboard)
+        self.import_action.triggered.connect(self._import_soundboard)
+
+    def _begin_package_operation(self):
+        if self._package_busy or self._restart_required:
+            return False
+        if any(dialog.isVisible() for dialog in self.findChildren(QDialog)):
+            self.statusBar().showMessage("Bitte zuerst den geöffneten Dialog speichern oder schließen.", 6000)
+            return False
+        self._package_busy = True
+        self._prepared_path = None
+        self.export_action.setEnabled(False)
+        self.import_action.setEnabled(False)
+        self.centralWidget().setEnabled(False)
+        return True
+
+    def _finish_package_operation(self):
+        if self._package_progress is not None:
+            self._package_progress.close()
+            self._package_progress.deleteLater()
+            self._package_progress = None
+        self._package_busy = False
+        self.export_action.setEnabled(not self._restart_required)
+        self.import_action.setEnabled(not self._restart_required)
+        self.centralWidget().setEnabled(not self._restart_required)
+
+    def _run_package_job(self, text, work, done):
+        """No widget/global audio access in work. Keep window alive until finished.
+
+        No cancellation once filesystem work starts: backend operations cannot be
+        safely interrupted. Qt remains responsive; closing is refused while busy.
+        """
+        if self._package_progress is not None:
+            self._package_progress.close()
+            self._package_progress.deleteLater()
+        progress = QProgressDialog(text, "", 0, 0, self)
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        self._package_progress = progress
+        job = PackageJob(work, self)
+        self._package_job = job
+
+        def finished():
+            self._package_job = None
+            progress.close()
+            job.deleteLater()
+            try:
+                done(job.result, job.error)
+            except Exception as error:
+                # A callback failure after activation must never enable stale saves.
+                if self._settings_writes_blocked:
+                    self._restart_required = True
+                    self.sound_end_timer.stop()
+                QMessageBox.critical(self, "Soundboard-Vorgang fehlgeschlagen",
+                                     "Bitte den Zustand prüfen und Jingleplayer gegebenenfalls neu starten.\n" +
+                                     str(error) + self._retained_preparation_text())
+                self._finish_package_operation()
+
+        job.finished.connect(finished)
+        job.start()
+
+    def _package_error_text(self, error):
+        if (isinstance(error, FileExistsError) or isinstance(getattr(error, "__cause__", None), FileExistsError)
+                or getattr(error, "code", "") == "destination"):
+            reason = "Das Exportziel existiert bereits. Bitte einen neuen Paketnamen wählen."
+        elif isinstance(error, jingleplayer_packages.PackageValidationError):
+            reason = ("Paket oder Audiodatei ungültig, beschädigt oder nicht verfügbar. "
+                      "Bitte Dateien, Dateinamen und Prüfsummen prüfen.")
+        else:
+            reason = "Vorgang fehlgeschlagen. Bitte Zugriffsrechte und freien Speicherplatz prüfen."
+        return reason + "\n\nDetails (auch Zugriffsrechte und Speicherplatz prüfen):\n" + str(error)
+
+    def _export_soundboard(self):
+        if not self._begin_package_operation():
+            return
+        try:
+            # Accepted edits already update runtime, even if their save failed.
+            # Modal editors must be saved/closed before invoking this operation.
+            snapshot = jingleplayer_logic.get_current_settings()
+            snapshot["window_size"] = [self.width(), self.height()]
+            destination, _ = QFileDialog.getSaveFileName(
+                self, "Neuen Soundboard-Paketordner wählen", "", "Paketordner (*)",
+                options=QFileDialog.Option.DontConfirmOverwrite)
+            if not destination:
+                self._finish_package_operation()
+                return
+            base = None
+            if any(p and not Path(p).is_absolute() for p in snapshot["buttons"]["paths"]):
+                QMessageBox.information(self, "Relative Audiodateien", "Bitte den Basisordner der relativen "
+                                        "Audiozuweisungen auswählen. Er wird nur für diesen Export verwendet.")
+                folder = QFileDialog.getExistingDirectory(self, "Basisordner der relativen Audiodateien")
+                if not folder:
+                    self._finish_package_operation()
+                    return
+                base = Path(folder)
+
+            def done(result, error):
+                if error is None:
+                    QMessageBox.information(self, "Soundboard exportiert", f"Paket gespeichert:\n{destination}")
+                else:
+                    QMessageBox.critical(self, "Export fehlgeschlagen", self._package_error_text(error))
+                self._finish_package_operation()
+
+            self._run_package_job("Soundboard wird exportiert …",
+                                  lambda: jingleplayer_packages.export_package_directory(
+                                      snapshot, Path(destination), source_base=base), done)
+        except Exception as error:
+            QMessageBox.critical(self, "Export fehlgeschlagen", self._package_error_text(error))
+            self._finish_package_operation()
+
+    def _import_soundboard(self):
+        if not self._begin_package_operation():
+            return
+        folder = QFileDialog.getExistingDirectory(self, "Soundboard-Paketordner auswählen")
+        if not folder:
+            self.statusBar().showMessage("Import abgebrochen.", 5000)
+            self._finish_package_operation()
+            return
+        source = Path(folder)
+
+        def preview(validated, error):
+            if error is not None:
+                QMessageBox.critical(self, "Ungültiges Soundboard-Paket", self._package_error_text(error))
+                self._finish_package_operation()
+                return
+            assigned = sum(bool(p) for p in validated.settings["buttons"]["paths"])
+            answer = QMessageBox.question(
+                self, "Soundboard importieren?",
+                f"{len(validated.assets)} Audiodateien, {assigned} zugewiesene Tasten (von 50, einschließlich "
+                "ausgeblendeter Tasten).\n\nDie aktuellen Tastenbelegungen werden vollständig ersetzt. "
+                "Lokale Fenstergröße und Gesamtlautstärke bleiben erhalten. "
+                "Vor dem Wechsel wird die Wiedergabe gestoppt und eine Wiederherstellungskopie angelegt.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                self.statusBar().showMessage("Import abgebrochen.", 5000)
+                self._finish_package_operation()
+                return
+            settings_path = Path(jingleplayer_logic.settings_file)
+
+            def prepare():
+                roots = self._managed_package_roots(settings_path)
+                prepared = jingleplayer_packages.prepare_package_import(source, roots[0])
+                return prepared, roots
+
+            def prepared_done(result, prepare_error):
+                if prepare_error is not None:
+                    self._import_failed(prepare_error)
+                    return
+                prepared, roots = result
+                self._prepared_path = prepared.preparation_directory
+                # Recheck preview against prepared metadata; confirmation must
+                # never authorize a different board changed while preparing.
+                if prepared.source_package != validated:
+                    self._import_failed(ValueError("Das Paket wurde nach der Vorschau verändert."))
+                    return
+                try:
+                    self.sound_end_timer.stop()
+                    for index in list(jingleplayer_logic.get_playing_indices()):
+                        jingleplayer_logic.stop_jingle(index, 0)
+                    if jingleplayer_logic.get_playing_indices():
+                        raise RuntimeError("Audiowiedergabe konnte nicht vollständig gestoppt werden.")
+                    for tile in self.jingle_tiles:
+                        tile.set_playing(False)
+                except Exception as stop_error:
+                    self._import_failed(stop_error)
+                    return
+                self._settings_writes_blocked = True
+                self._run_package_job("Soundboard wird aktiviert …", lambda:
+                    jingleplayer_packages.activate_prepared_import(prepared, settings_path, roots[1], roots[2]),
+                    self._activation_done)
+
+            self._run_package_job("Soundboard wird vorbereitet …", prepare, prepared_done)
+
+        self._run_package_job("Soundboard-Paket wird geprüft …",
+                              lambda: jingleplayer_packages.validate_package_directory(source), preview)
+
+    @staticmethod
+    def _managed_package_roots(settings_path):
+        """Only create managed roots; backend performs all package/file validation."""
+        if not settings_path.is_absolute() or not settings_path.is_file():
+            raise ValueError("Die aktive Settingsdatei fehlt. Bitte zuerst Einstellungen speichern.")
+        directory = settings_path.parent
+        roots = tuple(directory / name for name in ("import-staging", "library", "import-recovery"))
+        for root in roots:
+            for part in reversed((root, *root.parents)):
+                if part == root and not part.exists() and not part.is_symlink():
+                    part.mkdir(mode=0o700)
+                info = part.lstat()
+                if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                        getattr(info, "st_file_attributes", 0) & 0x400):
+                    raise ValueError(f"Unsicherer verwalteter Ordner: {part}")
+        return roots
+
+    def _retained_preparation_text(self):
+        return (f"\nVorbereitungsdaten bleiben erhalten:\n{self._prepared_path}"
+                if self._prepared_path is not None else "")
+
+    def _import_failed(self, error):
+        QMessageBox.critical(self, "Import nicht aktiviert", self._package_error_text(error) +
+                             self._retained_preparation_text())
+        self.sound_end_timer.start()
+        self._finish_package_operation()
+
+    def _activation_done(self, result, error):
+        self._settings_writes_blocked = True
+        outcome = getattr(error if error is not None else result, "outcome", "indeterminate")
+        recovery = getattr(error if error is not None else result, "recovery_directory", None)
+        details = (f"\nWiederherstellung:\n{recovery}" if recovery else "")
+        details += self._retained_preparation_text()
+        if error is not None:
+            retained = getattr(error, "retained_paths", ())
+            if retained:
+                details += "\nErhaltene Daten:\n" + "\n".join(map(str, retained))
+        if outcome == "indeterminate":
+            self._restart_required = True
+            QMessageBox.critical(self, "Importstatus unklar", "Der Import kann bereits auf dem Datenträger aktiv sein. "
+                                 "Es erfolgt keine automatische Wiederherstellung. Speichern ist gesperrt. "
+                                 "Bitte Jingleplayer schließen und den Zustand vor dem Neustart prüfen." + details)
+        elif outcome in ("committed", "not_committed"):
+            try:
+                self._reload_after_import()
+                self._settings_writes_blocked = False
+                self.sound_end_timer.start()
+            except Exception as reload_error:
+                self._restart_required = True
+                message = ("Der Import wurde auf dem Datenträger aktiviert, aber die Oberfläche konnte nicht "
+                           "neu geladen werden." if outcome == "committed" else
+                           "Der Import wurde nicht aktiviert. Die aktuellen Einstellungen konnten nicht neu geladen werden.")
+                QMessageBox.critical(self, "Neustart erforderlich", message + " Speichern bleibt gesperrt. "
+                                     "Bitte Jingleplayer schließen und neu starten.\n" + str(reload_error) + details)
+            else:
+                if outcome == "committed":
+                    QMessageBox.information(self, "Soundboard importiert", "Soundboard wurde aktiviert." + details)
+                else:
+                    QMessageBox.critical(self, "Import nicht aktiviert", "Die Einstellungen wurden durch den Import "
+                                         "nicht ersetzt.\n" + self._package_error_text(error) + details)
+        else:
+            self._restart_required = True
+            QMessageBox.critical(self, "Importstatus unklar", "Unbekannter Aktivierungsstatus. Speichern bleibt "
+                                 "gesperrt; bitte schließen und den Zustand prüfen." + details)
+        self._finish_package_operation()
+
+    def _reload_after_import(self):
+        """GUI thread only. Reload persistence bookkeeping before allowing saves.
+
+        Installed paths are unique, so existing cached sounds cannot shadow them.
+        Do not edit private engine caches/events; stop_jingle releases event maps.
+        """
+        jingleplayer_logic.initialize_settings()
+        status = jingleplayer_logic.get_settings_persistence_status()
+        if status["write_blocked"]:
+            raise RuntimeError(status.get("error") or "Einstellungen konnten nicht gelesen werden.")
+        current = jingleplayer_logic.get_current_settings()
+        buttons = current["buttons"]
+        self.jingle_texts = buttons["texts"]
+        self.jingle_colors = buttons["colors"]
+        self.jingle_paths = buttons["paths"]
+        self.jingle_volumes = buttons["volumes"]
+        self.buttons_per_row = list(buttons["per_row"])
+        self.last_folder = current["last_folder"]
+        self.fadeout_duration = current["fadeout_duration"]
+        self.button_height = int(current["button_height"])
+        self._persisted_window_size = tuple(current["window_size"])
+        previous = self.volume_slider.blockSignals(True)
+        try:
+            self.volume_slider.setValue(int(current["volume"]))
+            self.volume_value_label.setText(f"{int(current['volume'])} %")
+        finally:
+            self.volume_slider.blockSignals(previous)
+        self._rebuild_jingle_layout()
 
     def _build_main_layout(self, current_settings):
         central_widget = QWidget(self)
@@ -436,6 +738,8 @@ class JingleplayerMainWindow(QMainWindow):
             self.tile_layout.addWidget(row_widget, 1)
 
     def _handle_tile_click(self, index):
+        if self._package_busy or self._restart_required:
+            return
         if not 1 <= index <= len(self.jingle_tiles):
             return
         tile = self.jingle_tiles[index - 1]
@@ -459,6 +763,8 @@ class JingleplayerMainWindow(QMainWindow):
             )
 
     def _open_jingle_editor(self, index):
+        if self._package_busy or self._restart_required:
+            return
         list_index = index - 1
         dialog = JingleEditDialog(
             self.jingle_texts[list_index],
@@ -514,6 +820,8 @@ class JingleplayerMainWindow(QMainWindow):
                 self.jingle_tiles[index - 1].set_playing(update["playing"])
 
     def _handle_volume_change(self, volume_percent):
+        if self._package_busy or self._settings_writes_blocked:
+            return
         self.volume_value_label.setText(f"{volume_percent} %")
         jingleplayer_logic.set_volume_logic(volume_percent)
         self._save_settings_with_feedback(
@@ -522,6 +830,8 @@ class JingleplayerMainWindow(QMainWindow):
         )
 
     def _save_settings_with_feedback(self, current_settings, title):
+        if self._package_busy or self._settings_writes_blocked:
+            return False
         result = jingleplayer_logic.save_settings(current_settings)
         if result.get("success"):
             return True
@@ -533,6 +843,8 @@ class JingleplayerMainWindow(QMainWindow):
         return False
 
     def _open_settings_dialog(self):
+        if self._package_busy or self._restart_required:
+            return
         current_settings = jingleplayer_logic.get_current_settings()
         dialog = SettingsDialog(
             current_settings["fadeout_duration"],
@@ -550,6 +862,8 @@ class JingleplayerMainWindow(QMainWindow):
         )
 
     def _save_application_settings(self, fadeout_duration, per_row, button_height):
+        if self._package_busy or self._settings_writes_blocked:
+            return
         current_settings = jingleplayer_logic.get_current_settings()
         button_settings = current_settings["buttons"]
         jingleplayer_logic.update_settings_data(
@@ -585,7 +899,14 @@ class JingleplayerMainWindow(QMainWindow):
         )
 
     def closeEvent(self, event):
+        if self._package_busy:
+            self.statusBar().showMessage("Bitte warten, bis der Soundboard-Vorgang abgeschlossen ist.", 5000)
+            event.ignore()
+            return
         self.sound_end_timer.stop()
+        if self._settings_writes_blocked:
+            super().closeEvent(event)
+            return
         current_size = (self.width(), self.height())
         if current_size != self._persisted_window_size:
             current_settings = jingleplayer_logic.get_current_settings()
