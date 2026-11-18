@@ -2,6 +2,9 @@
 
 import sys
 import stat
+import os
+import re
+import unicodedata
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QTimer, Qt, Signal
@@ -19,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QInputDialog,
     QMessageBox,
     QProgressDialog,
     QPushButton,
@@ -462,12 +466,15 @@ class JingleplayerMainWindow(QMainWindow):
             # Modal editors must be saved/closed before invoking this operation.
             snapshot = jingleplayer_logic.get_current_settings()
             snapshot["window_size"] = [self.width(), self.height()]
-            destination, _ = QFileDialog.getSaveFileName(
-                self, "Neuen Soundboard-Paketordner wählen", "", "Paketordner (*)",
-                options=QFileDialog.Option.DontConfirmOverwrite)
-            if not destination:
+            parent = QFileDialog.getExistingDirectory(self, "Übergeordneten Ordner für den Export auswählen")
+            if not parent:
                 self._finish_package_operation()
                 return
+            name, accepted = QInputDialog.getText(self, "Neues Soundboard-Paket", "Name des neuen Paketordners:")
+            if not accepted:
+                self._finish_package_operation()
+                return
+            destination = self._export_destination(Path(parent), name)
             base = None
             if any(p and not Path(p).is_absolute() for p in snapshot["buttons"]["paths"]):
                 QMessageBox.information(self, "Relative Audiodateien", "Bitte den Basisordner der relativen "
@@ -485,12 +492,120 @@ class JingleplayerMainWindow(QMainWindow):
                     QMessageBox.critical(self, "Export fehlgeschlagen", self._package_error_text(error))
                 self._finish_package_operation()
 
-            self._run_package_job("Soundboard wird exportiert …",
-                                  lambda: jingleplayer_packages.export_package_directory(
-                                      snapshot, Path(destination), source_base=base), done)
+            def preflight_done(result, error):
+                if error is not None:
+                    done(None, error)
+                    return
+                missing, blocked = result
+                if blocked:
+                    QMessageBox.critical(self, "Audiodateien können nicht exportiert werden",
+                                         "Diese Zuweisungen sind nicht sicher lesbar oder ungültig. "
+                                         "Bitte über die Tasteneinstellungen prüfen und neu zuweisen.\n\n" +
+                                         "\n\n".join(blocked + list(missing.values())))
+                    self._finish_package_operation()
+                    return
+                if missing:
+                    if not self._confirm_missing_export(missing):
+                        self.statusBar().showMessage("Export abgebrochen.", 5000)
+                        self._finish_package_operation()
+                        return
+                    for index in missing:
+                        snapshot["buttons"]["paths"][index] = ""
+                self._run_package_job("Soundboard wird exportiert …",
+                                      lambda: jingleplayer_packages.export_package_directory(
+                                          snapshot, destination, source_base=base), done)
+
+            self._run_package_job("Alle 50 Audiozuweisungen werden geprüft …",
+                                  lambda: self._preflight_export(snapshot, base), preflight_done)
         except Exception as error:
             QMessageBox.critical(self, "Export fehlgeschlagen", self._package_error_text(error))
             self._finish_package_operation()
+
+    @staticmethod
+    def _export_destination(parent, name):
+        """Accept exactly one portable directory component, never normalize input."""
+        if (not isinstance(name, str) or not name or name in (".", "..") or
+                name.endswith((".", " ")) or
+                any(c in '/\\<>:"|?*' or unicodedata.category(c).startswith("C") for c in name) or
+                re.fullmatch(r"CON|PRN|AUX|NUL|CLOCK\$|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³]",
+                             name.split(".")[0].rstrip(" ").upper()) or
+                len(name.encode("utf-8")) > 200):
+            raise ValueError("Ungültiger Paketname. Bitte einen kurzen Namen ohne Pfadzeichen, "
+                             "reservierte Windows-Namen oder abschließende Punkte/Leerzeichen eingeben.")
+        if not parent.is_absolute() or not parent.is_dir():
+            raise ValueError("Bitte einen vorhandenen übergeordneten Ordner auswählen.")
+        destination = parent / name
+        if os.path.lexists(destination):
+            raise FileExistsError(f"Das Exportziel existiert bereits: {destination}")
+        return destination
+
+    @staticmethod
+    def _preflight_export(snapshot, base):
+        """Read-only advisory check, not a replacement for backend validation.
+
+        Only FileNotFoundError is omittable. Access errors, links/reparse points,
+        nonregular/unsupported sources and malformed paths block export. Inspect
+        every assignment, including aliases/hidden slots, and never infer CWD.
+        Readability is not codec validation; existing files are never omitted for
+        decoding/validation errors. Backend rechecks all retained sources later.
+        """
+        paths = snapshot["buttons"]["paths"]
+        if len(paths) != 50:
+            raise ValueError("Der Export benötigt genau 50 persistente Tastenplätze.")
+        missing, blocked = {}, []
+        for index, value in enumerate(paths):
+            description = f"Taste {index + 1}: {snapshot['buttons']['texts'][index]}\n{value}"
+            try:
+                if not isinstance(value, str):
+                    raise ValueError("Ungültiger Audiopfad")
+                if not value:
+                    continue
+                if "\0" in value:
+                    raise ValueError("Ungültiger Audiopfad")
+                path = Path(value)
+                if ".." in path.parts:
+                    raise ValueError("Übergeordnete Pfadkomponenten sind nicht erlaubt")
+                if not path.is_absolute():
+                    if base is None or not base.is_absolute() or path.drive or path.root:
+                        raise ValueError("Relativer Audiopfad benötigt einen expliziten Basisordner")
+                    path = base / path
+                    description += f"\nAufgelöster Pfad: {path}"
+                if path.suffix.lower() not in (".mp3", ".wav"):
+                    raise ValueError("Nur MP3 und WAV werden unterstützt")
+                for ancestor in reversed(path.parents):
+                    info = ancestor.lstat()
+                    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                            getattr(info, "st_file_attributes", 0) & 0x400):
+                        raise ValueError("Unsicherer Audioordner (Link oder kein regulärer Ordner)")
+                info = path.lstat()
+                if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                        getattr(info, "st_file_attributes", 0) & 0x400):
+                    raise ValueError("Kein reguläres Audiofile oder Link/Reparse-Punkt")
+                flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+                with os.fdopen(os.open(path, flags), "rb") as stream:
+                    stream.read(1)
+            except FileNotFoundError:
+                missing[index] = description + "\nDatei oder Audioordner fehlt."
+            except (OSError, ValueError) as error:
+                blocked.append(description + "\n" + str(error))
+        return missing, blocked
+
+    def _confirm_missing_export(self, missing):
+        box = QMessageBox(self)
+        box.setWindowTitle("Fehlende Audiodateien")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText("Folgende Audiozuweisungen fehlen (einschließlich ausgeblendeter Tasten):\n\n" +
+                    "\n\n".join(missing.values()))
+        box.setInformativeText("Ohne diese Dateien exportieren? Nur im exportierten Paket werden diese "
+                               "Audiozuweisungen geleert. Ihre aktuellen Tasten bleiben unverändert. "
+                               "Zum Neuzuweisen: Export abbrechen und die vorhandenen Tasteneinstellungen verwenden.")
+        proceed = box.addButton("Ohne fehlende Dateien exportieren", QMessageBox.ButtonRole.AcceptRole)
+        cancel = box.addButton("Export abbrechen", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() == proceed
 
     def _import_soundboard(self):
         if not self._begin_package_operation():

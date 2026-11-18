@@ -67,6 +67,7 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", question)
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a, **k: "")
     monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))
+    monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a, **k: ("", False))
     window = gui.create_main_window()
     value = SimpleNamespace(app=app, window=window, active=active, initial=initial,
                             messages=messages, questions=questions, playing=playing, stops=stops)
@@ -110,6 +111,15 @@ def select_import(monkeypatch, package):
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a, **k: str(package))
 
 
+def select_export(monkeypatch, destination, base=None):
+    def directory(parent, title):
+        if "Basisordner" in title:
+            return str(base) if base is not None else ""
+        return str(destination.parent)
+    monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", directory)
+    monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a, **k: (destination.name, True))
+
+
 def test_actions_and_export_cancel_unchanged(context):
     window = context.window
     assert window.export_action.text() == "Soundboard exportieren..."
@@ -123,7 +133,7 @@ def test_actions_and_export_cancel_unchanged(context):
 def test_export_snapshot_all_slots_includes_unsaved_edits(context, tmp_path, monkeypatch):
     calls = []
     gui.jingleplayer_logic.button_texts[49] = "Unsaved hidden"
-    monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "new"), ""))
+    select_export(monkeypatch, tmp_path / "new")
 
     def export(snapshot, destination, *, source_base):
         calls.append((snapshot, destination, source_base, QThread.currentThread()))
@@ -140,7 +150,7 @@ def test_export_snapshot_all_slots_includes_unsaved_edits(context, tmp_path, mon
 
 @pytest.mark.parametrize("error", [FileExistsError("already exists"), PermissionError("disk full / denied")])
 def test_export_errors_leave_runtime_and_disk_unchanged(context, tmp_path, monkeypatch, error):
-    monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "new"), ""))
+    select_export(monkeypatch, tmp_path / "new")
 
     def fail(*a, **k):
         raise error
@@ -156,8 +166,9 @@ def test_export_errors_leave_runtime_and_disk_unchanged(context, tmp_path, monke
 def test_export_relative_paths_request_explicit_base(context, tmp_path, monkeypatch):
     gui.jingleplayer_logic.jingle_paths[49] = "relative.wav"
     chosen_base = tmp_path / "audio"
-    monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "new"), ""))
-    monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a, **k: str(chosen_base))
+    chosen_base.mkdir()
+    (chosen_base / "relative.wav").write_bytes(b"audio")
+    select_export(monkeypatch, tmp_path / "new", chosen_base)
     calls = []
     monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: calls.append(k))
     context.window._export_soundboard()
@@ -170,7 +181,7 @@ def test_real_gui_export_validated_and_source_unchanged(context, tmp_path, monke
     audio.write_bytes(b"audio")
     gui.jingleplayer_logic.jingle_paths[49] = str(audio)
     destination = tmp_path / "exported board"
-    monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: (str(destination), ""))
+    select_export(monkeypatch, destination)
     original = context.active.read_bytes()
     context.playing.extend([1, 50])
     context.window._export_soundboard()
@@ -184,7 +195,7 @@ def test_real_gui_export_validated_and_source_unchanged(context, tmp_path, monke
 
 def test_relative_base_cancel_does_not_export(context, tmp_path, monkeypatch):
     gui.jingleplayer_logic.jingle_paths[49] = "relative.wav"
-    monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "new"), ""))
+    select_export(monkeypatch, tmp_path / "new")
     monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: pytest.fail("base canceled"))
     context.window._export_soundboard()
     assert not context.window._package_busy
@@ -398,3 +409,166 @@ def test_playback_stop_failure_prevents_activation(context, tmp_path, monkeypatc
     assert context.active.read_bytes() == original
     assert context.messages[-1][1] == "Import nicht aktiviert"
     assert context.window.sound_end_timer.isActive()
+
+
+@pytest.mark.parametrize("name", ["", " ", ".", "..", "../escape", "a/b", "a\\b", "C:board",
+                                  "CON", "nul.wav", "COM1", "LPT²", "CLOCK$", "CONIN$", "CONOUT$", "a.", "a ", "a?", "a*",
+                                  'a"', "a<", "a>", "a|", "a\0", "a\n"])
+def test_export_invalid_package_names(context, tmp_path, monkeypatch, name):
+    select_export(monkeypatch, tmp_path / "new")
+    monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a, **k: (name, True))
+    monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: pytest.fail("invalid destination"))
+    original = context.active.read_bytes()
+    context.window._export_soundboard()
+    assert not context.window._package_busy
+    assert context.active.read_bytes() == original
+    assert "Ungültiger Paketname" in context.messages[-1][2]
+
+
+def test_export_existing_destination_is_preserved(context, tmp_path, monkeypatch):
+    target = tmp_path / "existing"
+    target.mkdir()
+    (target / "keep").write_bytes(b"keep")
+    select_export(monkeypatch, target)
+    context.window._export_soundboard()
+    assert (target / "keep").read_bytes() == b"keep"
+    assert "existiert bereits" in context.messages[-1][2]
+    assert not context.window._package_busy
+
+
+def test_export_package_name_cancel_does_not_preflight(context, tmp_path, monkeypatch):
+    monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a: str(tmp_path))
+    monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a: ("typed name", False))
+    monkeypatch.setattr(context.window, "_preflight_export", lambda *a: pytest.fail("name canceled"))
+    original = gui.jingleplayer_logic.get_current_settings()
+    context.window._export_soundboard()
+    assert not context.window._package_busy
+    assert gui.jingleplayer_logic.get_current_settings() == original
+
+
+@pytest.mark.parametrize("proceed,fail_backend", [(False, False), (True, False), (True, True)])
+def test_missing_visible_and_hidden_assignments_only_cleared_in_export_snapshot(
+        context, tmp_path, monkeypatch, proceed, fail_backend):
+    missing = tmp_path / "Missing 音楽.wav"
+    valid = tmp_path / "valid.wav"
+    valid.write_bytes(b"audio")
+    logic = gui.jingleplayer_logic
+    logic.jingle_paths[0] = logic.jingle_paths[49] = str(missing)
+    logic.jingle_paths[1] = str(valid)
+    before = logic.get_current_settings()
+    disk_before = context.active.read_bytes()
+    target = tmp_path / "Board 音楽"
+    select_export(monkeypatch, target)
+    warnings = []
+
+    def confirm(values):
+        warnings.append(values)
+        return proceed
+
+    monkeypatch.setattr(context.window, "_confirm_missing_export", confirm)
+    if fail_backend:
+        def fail(*a, **k):
+            raise PermissionError("no space / permission denied")
+        monkeypatch.setattr(packages, "export_package_directory", fail)
+    context.window._export_soundboard()
+    drain(context)
+    assert len(warnings) == 1 and set(warnings[0]) == {0, 49}
+    assert "Taste 1: Slot 0" in warnings[0][0]
+    assert "Taste 50: Slot 49" in warnings[0][49]
+    assert str(missing) in warnings[0][49]
+    assert logic.get_current_settings() == before
+    assert context.active.read_bytes() == disk_before and not context.stops
+    if proceed and not fail_backend:
+        exported = packages.validate_package_directory(target)
+        expected = deepcopy(before)
+        expected.pop("last_folder")
+        expected["buttons"]["paths"][0] = expected["buttons"]["paths"][49] = ""
+        expected["buttons"]["paths"][1] = exported.settings["buttons"]["paths"][1]
+        assert exported.settings == expected
+        assert len(exported.assets) == 1
+        assert (target / exported.assets[0].path).read_bytes() == b"audio"
+        assert str(target) in context.messages[-1][2]
+    else:
+        assert not target.exists()
+
+
+@pytest.mark.parametrize("problem", ["unreadable", "directory", "unsupported", "backend_rejects"])
+def test_existing_problematic_files_never_offered_for_omission(context, tmp_path, monkeypatch, problem):
+    audio = tmp_path / ("audio.ogg" if problem == "unsupported" else "audio.wav")
+    if problem == "directory":
+        audio.mkdir()
+    else:
+        audio.write_bytes(b"existing bytes")
+    gui.jingleplayer_logic.jingle_paths[49] = str(audio)
+    select_export(monkeypatch, tmp_path / "new")
+    monkeypatch.setattr(context.window, "_confirm_missing_export", lambda *a: pytest.fail("not a missing file"))
+    if problem == "unreadable":
+        real_open = gui.os.open
+
+        def denied(path, *args, **kwargs):
+            if Path(path) == audio:
+                raise PermissionError("not readable")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(gui.os, "open", denied)
+    if problem == "backend_rejects":
+        def invalid(*a, **k):
+            raise packages.PackageValidationError("integrity", str(audio), "invalid/corrupt asset")
+        monkeypatch.setattr(packages, "export_package_directory", invalid)
+    original = gui.jingleplayer_logic.get_current_settings()
+    context.window._export_soundboard()
+    drain(context)
+    assert gui.jingleplayer_logic.get_current_settings() == original
+    assert context.messages[-1][0] == "critical"
+    assert str(audio) in context.messages[-1][2]
+
+
+def test_missing_warning_defaults_to_cancel_and_lists_assignments(context, monkeypatch):
+    observed = []
+
+    def cancel(box):
+        observed.append((box.text(), box.informativeText(), box.defaultButton().text(),
+                         [b.text() for b in box.buttons()]))
+        box.defaultButton().click()
+
+    monkeypatch.setattr(QMessageBox, "exec", cancel)
+    assert not context.window._confirm_missing_export({49: "Taste 50: Hidden\n/missing.wav"})
+    assert "Taste 50: Hidden" in observed[0][0] and "/missing.wav" in observed[0][0]
+    assert "Tasteneinstellungen" in observed[0][1]
+    assert observed[0][2] == "Export abbrechen"
+    assert "Ohne fehlende Dateien exportieren" in observed[0][3]
+
+
+def test_relative_missing_preflight_uses_selected_base(context, tmp_path, monkeypatch):
+    gui.jingleplayer_logic.jingle_paths[49] = "missing.wav"
+    base = tmp_path / "explicit base"
+    base.mkdir()
+    select_export(monkeypatch, tmp_path / "new", base)
+    captured = []
+    monkeypatch.setattr(context.window, "_confirm_missing_export", lambda missing: captured.append(missing) or True)
+    context.window._export_soundboard()
+    drain(context)
+    assert set(captured[0]) == {49}
+    assert str(base / "missing.wav") in captured[0][49]
+    assert packages.validate_package_directory(tmp_path / "new").assets == ()
+
+
+def test_source_removed_after_preflight_is_not_silently_omitted(context, tmp_path, monkeypatch):
+    source = tmp_path / "source.wav"
+    source.write_bytes(b"audio")
+    gui.jingleplayer_logic.jingle_paths[49] = str(source)
+    destination = tmp_path / "new"
+    select_export(monkeypatch, destination)
+    export = packages.export_package_directory
+
+    def disappeared(*args, **kwargs):
+        source.unlink()
+        return export(*args, **kwargs)
+
+    monkeypatch.setattr(packages, "export_package_directory", disappeared)
+    monkeypatch.setattr(context.window, "_confirm_missing_export", lambda *a: pytest.fail("missing after preflight"))
+    context.window._export_soundboard()
+    drain(context)
+    assert not destination.exists()
+    assert gui.jingleplayer_logic.jingle_paths[49] == str(source)
+    assert context.messages[-1][0] == "critical"
