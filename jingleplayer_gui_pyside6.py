@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 
 import jingleplayer_logic
 import jingleplayer_packages
+import jingleplayer_media_packages as media_packages
 from jingleplayer_audio_pools import validate_pool, pool_file_path
 
 
@@ -641,8 +642,13 @@ class JingleplayerMainWindow(QMainWindow):
         self.export_action = QAction("Soundboard exportieren...", self)
         self.import_action = QAction("Soundboard importieren...", self)
         package_menu.addActions([self.export_action, self.import_action])
+        self.legacy_export_action = QAction("Einzelboard exportieren (altes Format)...", self)
+        self.legacy_import_action = QAction("Alten Paketordner importieren...", self)
+        package_menu.addActions([self.legacy_export_action, self.legacy_import_action])
         self.export_action.triggered.connect(self._export_soundboard)
-        self.import_action.triggered.connect(self._import_soundboard)
+        self.import_action.triggered.connect(self._import_zip_soundboard)
+        self.legacy_export_action.triggered.connect(self._export_legacy_soundboard)
+        self.legacy_import_action.triggered.connect(self._import_soundboard)
 
     def _refresh_preset_selector(self):
         blocked = self.preset_combo.blockSignals(True)
@@ -785,6 +791,8 @@ class JingleplayerMainWindow(QMainWindow):
         self._prepared_path = None
         self.export_action.setEnabled(False)
         self.import_action.setEnabled(False)
+        self.legacy_export_action.setEnabled(False)
+        self.legacy_import_action.setEnabled(False)
         self.centralWidget().setEnabled(False)
         return True
 
@@ -796,6 +804,8 @@ class JingleplayerMainWindow(QMainWindow):
         self._package_busy = False
         self.export_action.setEnabled(not self._restart_required)
         self.import_action.setEnabled(not self._restart_required)
+        self.legacy_export_action.setEnabled(not self._restart_required)
+        self.legacy_import_action.setEnabled(not self._restart_required)
         self.centralWidget().setEnabled(not self._restart_required)
 
     def _run_package_job(self, text, work, done):
@@ -847,6 +857,103 @@ class JingleplayerMainWindow(QMainWindow):
         return reason + "\n\nDetails (auch Zugriffsrechte und Speicherplatz prüfen):\n" + str(error)
 
     def _export_soundboard(self):
+        if not self._begin_package_operation():
+            return
+        try:
+            snapshot = jingleplayer_logic.get_preset_settings()
+            snapshot["window_size"] = [self.width(), self.height()]
+            parent = QFileDialog.getExistingDirectory(self, "Zielordner für das vollständige Medienpaket")
+            if not parent:
+                self._finish_package_operation()
+                return
+            name, accepted = QInputDialog.getText(self, "Vollständiges Soundboard-Paket", "Paketname (alle Presets):")
+            if not accepted:
+                self._finish_package_operation()
+                return
+            destination = self._export_destination(Path(parent), name)
+            if destination.suffix.lower() != ".zip":
+                destination = self._export_destination(Path(parent), name + ".zip")
+            # Legacy single-file playback historically uses CWD. Require an
+            # explicit base for those slots; pools/images retain settings-base rules.
+            relative_slots = [(preset, i, raw) for preset in snapshot["presets"]
+                              for i, raw in enumerate(preset["buttons"]["paths"])
+                              if raw and str(i + 1) not in preset.get("audio_pools", {})
+                              and not Path(raw).is_absolute()]
+            if relative_slots:
+                base = QFileDialog.getExistingDirectory(self, "Basisordner der relativen Einzeldateien")
+                if not base:
+                    self._finish_package_operation()
+                    return
+                for preset, i, raw in relative_slots:
+                    preset["buttons"]["paths"][i] = str(pool_file_path(raw, Path(base)))
+
+            def done(result, error):
+                if error is None:
+                    QMessageBox.information(self, "Soundboard exportiert",
+                                            f"Alle {len(snapshot['presets'])} Presets mit Medien gespeichert:\n{destination}")
+                else:
+                    QMessageBox.critical(self, "Export fehlgeschlagen", self._package_error_text(error))
+                self._finish_package_operation()
+
+            self._run_package_job("Alle Presets und Medien werden exportiert …", lambda:
+                                  media_packages.export_archive(snapshot, destination,
+                                      source_base=Path(jingleplayer_logic.settings_file).parent, name=name), done)
+        except (OSError, ValueError) as error:
+            QMessageBox.critical(self, "Export fehlgeschlagen", str(error))
+            self._finish_package_operation()
+
+    def _import_zip_soundboard(self):
+        if not self._begin_package_operation():
+            return
+        filename, _ = QFileDialog.getOpenFileName(self, "Vollständiges Medienpaket importieren", "", "Soundboard-Pakete (*.zip)")
+        if not filename:
+            self._finish_package_operation()
+            return
+        source = Path(filename)
+
+        def preview(package, error):
+            if error is not None:
+                QMessageBox.critical(self, "Ungültiges Medienpaket", self._package_error_text(error))
+                self._finish_package_operation()
+                return
+            settings_path = Path(jingleplayer_logic.settings_file)
+            audio = sum(a.kind == "audio" for a in package.assets)
+            images = sum(a.kind == "background" for a in package.assets)
+            answer = QMessageBox.question(self, "Medienpaket importieren?",
+                f"Paket: {package.name}\n{len(package.settings['presets'])} Presets, {audio} Audiodateien, "
+                f"{images} Hintergrundbilder.\n\nMedien werden dauerhaft hier gespeichert:\n"
+                f"{settings_path.parent / 'imported_soundboards'}\n\n"
+                "Alle Presets werden hinzugefügt; Namenskonflikte erhalten einen Zusatz. Bestehende Presets "
+                "und lokale globale Einstellungen bleiben erhalten. Vor der Aktivierung wird die Wiedergabe gestoppt.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                self._finish_package_operation()
+                return
+            saved = jingleplayer_logic.save_settings(jingleplayer_logic.get_current_settings())
+            if not saved["success"]:
+                self._import_failed(RuntimeError(saved["error"]))
+                return
+            try:
+                expected = jingleplayer_logic.get_settings_storage_token()
+                self.sound_end_timer.stop()
+                for index in list(jingleplayer_logic.get_playing_indices()):
+                    jingleplayer_logic.stop_jingle(index, 0)
+                jingleplayer_logic.stop_all_playback()
+                if jingleplayer_logic.get_playing_indices():
+                    raise RuntimeError("Audiowiedergabe konnte nicht gestoppt werden.")
+                for tile in self.jingle_tiles:
+                    tile.set_playing(False)
+            except (ValueError, RuntimeError, OSError) as stop_error:
+                self._import_failed(stop_error)
+                return
+            self._settings_writes_blocked = True
+            self._run_package_job("Medien werden geprüft, installiert und aktiviert …", lambda:
+                                  media_packages.import_archive(source, settings_path, expected=expected, confirmed=package),
+                                  self._activation_done)
+
+        self._run_package_job("Medienpaket wird geprüft …", lambda: media_packages.validate_archive(source), preview)
+
+    def _export_legacy_soundboard(self):
         if not self._begin_package_operation():
             return
         try:
@@ -1097,7 +1204,7 @@ class JingleplayerMainWindow(QMainWindow):
         if not settings_path.is_absolute() or not settings_path.is_file():
             raise ValueError("Die aktive Settingsdatei fehlt. Bitte zuerst Einstellungen speichern.")
         directory = settings_path.parent
-        roots = tuple(directory / name for name in ("import-staging", "library", "import-recovery"))
+        roots = tuple(directory / name for name in ("import-staging", "imported_soundboards", "import-recovery"))
         for root in roots:
             for part in reversed((root, *root.parents)):
                 if part == root and not part.exists() and not part.is_symlink():
@@ -1123,6 +1230,9 @@ class JingleplayerMainWindow(QMainWindow):
         outcome = getattr(error if error is not None else result, "outcome", "indeterminate")
         recovery = getattr(error if error is not None else result, "recovery_directory", None)
         details = (f"\nWiederherstellung:\n{recovery}" if recovery else "")
+        installed = getattr(error if error is not None else result, "installed_directory", None)
+        if installed is not None:
+            details += f"\nMedienordner:\n{installed}"
         details += self._retained_preparation_text()
         if error is not None:
             retained = getattr(error, "retained_paths", ())

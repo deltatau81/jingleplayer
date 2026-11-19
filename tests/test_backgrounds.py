@@ -475,7 +475,7 @@ def test_package_import_excludes_background_and_preserves_other_presets(context,
     context.window._reload_after_import()
     target = tmp_path / "export-without-image"
     select_export(monkeypatch, target)
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     exported = packages.validate_package_directory(target)
     assert exported.settings["schema_version"] == 2 and "background_image" not in exported.settings

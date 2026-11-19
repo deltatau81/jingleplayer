@@ -129,7 +129,7 @@ def test_actions_and_export_cancel_unchanged(context):
     assert window.export_action.text() == "Soundboard exportieren..."
     assert window.import_action.text() == "Soundboard importieren..."
     before = context.active.read_bytes()
-    window._export_soundboard()
+    window._export_legacy_soundboard()
     assert not window._package_busy
     assert context.active.read_bytes() == before and not context.stops
 
@@ -144,7 +144,7 @@ def test_export_snapshot_all_slots_includes_unsaved_edits(context, tmp_path, mon
 
     monkeypatch.setattr(packages, "export_package_directory", export)
     before = context.active.read_bytes()
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert len(calls) == 1 and len(calls[0][0]["buttons"]["paths"]) == 50
     assert calls[0][0]["buttons"]["texts"][49] == "Unsaved hidden"
@@ -161,7 +161,7 @@ def test_export_errors_leave_runtime_and_disk_unchanged(context, tmp_path, monke
 
     monkeypatch.setattr(packages, "export_package_directory", fail)
     before = gui.jingleplayer_logic.get_current_settings()
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert gui.jingleplayer_logic.get_current_settings() == before
     assert context.messages[-1][0] == "critical" and not context.stops
@@ -175,7 +175,7 @@ def test_export_relative_paths_request_explicit_base(context, tmp_path, monkeypa
     select_export(monkeypatch, tmp_path / "new", chosen_base)
     calls = []
     monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: calls.append(k))
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert calls == [{"source_base": chosen_base}]
 
@@ -188,7 +188,7 @@ def test_real_gui_export_validated_and_source_unchanged(context, tmp_path, monke
     select_export(monkeypatch, destination)
     original = context.active.read_bytes()
     context.playing.extend([1, 50])
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     exported = packages.validate_package_directory(destination)
     assert len(exported.settings["buttons"]["paths"]) == 50
@@ -201,7 +201,7 @@ def test_relative_base_cancel_does_not_export(context, tmp_path, monkeypatch):
     gui.jingleplayer_logic.jingle_paths[49] = "relative.wav"
     select_export(monkeypatch, tmp_path / "new")
     monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: pytest.fail("base canceled"))
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     assert not context.window._package_busy
 
 
@@ -268,7 +268,7 @@ def test_real_import_reload_close_and_hidden_slots(context, tmp_path, monkeypatc
     window.close()
     disk = packages.presets.extract_active_board(json.loads(context.active.read_bytes()))
     assert disk["buttons"]["texts"][49] == "Hidden Unicode 音楽"
-    assert Path(disk["buttons"]["paths"][49]).is_relative_to(context.active.parent / "library")
+    assert Path(disk["buttons"]["paths"][49]).is_relative_to(context.active.parent / "imported_soundboards")
     assert disk["volume"] == 42
     assert disk["last_folder"] == context.initial["last_folder"]
     assert disk["buttons"]["volumes"][49] == 7
@@ -332,7 +332,7 @@ def test_busy_guards_reentrant_mutation_and_close(context, monkeypatch):
     monkeypatch.setattr(gui.QFileDialog, "getSaveFileName", lambda *a, **k: pytest.fail("reentrant"))
     before = gui.jingleplayer_logic.get_current_settings()
     window._import_soundboard()
-    window._export_soundboard()
+    window._export_legacy_soundboard()
     window._open_settings_dialog()
     window._manage_preset("create")
     window._open_jingle_editor(1)
@@ -351,7 +351,7 @@ def test_busy_guards_reentrant_mutation_and_close(context, monkeypatch):
 def test_visible_editor_blocks_operations(context):
     dialog = QDialog(context.window)
     dialog.show()
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     assert not context.window._package_busy
     dialog.reject()
 
@@ -428,7 +428,7 @@ def test_export_invalid_package_names(context, tmp_path, monkeypatch, name):
     monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a, **k: (name, True))
     monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: pytest.fail("invalid destination"))
     original = context.active.read_bytes()
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     assert not context.window._package_busy
     assert context.active.read_bytes() == original
     assert "Ungültiger Paketname" in context.messages[-1][2]
@@ -439,7 +439,7 @@ def test_export_existing_destination_is_preserved(context, tmp_path, monkeypatch
     target.mkdir()
     (target / "keep").write_bytes(b"keep")
     select_export(monkeypatch, target)
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     assert (target / "keep").read_bytes() == b"keep"
     assert "existiert bereits" in context.messages[-1][2]
     assert not context.window._package_busy
@@ -450,7 +450,7 @@ def test_export_package_name_cancel_does_not_preflight(context, tmp_path, monkey
     monkeypatch.setattr(gui.QInputDialog, "getText", lambda *a: ("typed name", False))
     monkeypatch.setattr(context.window, "_preflight_export", lambda *a: pytest.fail("name canceled"))
     original = gui.jingleplayer_logic.get_current_settings()
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     assert not context.window._package_busy
     assert gui.jingleplayer_logic.get_current_settings() == original
 
@@ -479,7 +479,7 @@ def test_missing_visible_and_hidden_assignments_only_cleared_in_export_snapshot(
         def fail(*a, **k):
             raise PermissionError("no space / permission denied")
         monkeypatch.setattr(packages, "export_package_directory", fail)
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert len(warnings) == 1 and set(warnings[0]) == {0, 49}
     assert "Taste 1: Slot 0" in warnings[0][0]
@@ -525,7 +525,7 @@ def test_existing_problematic_files_never_offered_for_omission(context, tmp_path
             raise packages.PackageValidationError("integrity", str(audio), "invalid/corrupt asset")
         monkeypatch.setattr(packages, "export_package_directory", invalid)
     original = gui.jingleplayer_logic.get_current_settings()
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert gui.jingleplayer_logic.get_current_settings() == original
     assert context.messages[-1][0] == "critical"
@@ -555,7 +555,7 @@ def test_relative_missing_preflight_uses_selected_base(context, tmp_path, monkey
     select_export(monkeypatch, tmp_path / "new", base)
     captured = []
     monkeypatch.setattr(context.window, "_confirm_missing_export", lambda missing: captured.append(missing) or True)
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert set(captured[0]) == {49}
     assert str(base / "missing.wav") in captured[0][49]
@@ -576,7 +576,7 @@ def test_source_removed_after_preflight_is_not_silently_omitted(context, tmp_pat
 
     monkeypatch.setattr(packages, "export_package_directory", disappeared)
     monkeypatch.setattr(context.window, "_confirm_missing_export", lambda *a: pytest.fail("missing after preflight"))
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert not destination.exists()
     assert gui.jingleplayer_logic.jingle_paths[49] == str(source)
@@ -602,7 +602,7 @@ def test_missing_and_unreadable_assignments_together_block_omission(context, tmp
     monkeypatch.setattr(gui.os, "open", denied)
     monkeypatch.setattr(context.window, "_confirm_missing_export", lambda *a: pytest.fail("blocked file present"))
     monkeypatch.setattr(packages, "export_package_directory", lambda *a, **k: pytest.fail("must not export"))
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     assert context.messages[-1][0] == "critical"
     assert str(missing) in context.messages[-1][2] and str(unreadable) in context.messages[-1][2]

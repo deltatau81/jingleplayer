@@ -79,7 +79,7 @@ def test_gui_import_keeps_other_presets_and_export_is_active_only(context, tmp_p
     assert context.window.jingle_texts[0] == "Imported"
     destination = tmp_path / "reexport"
     select_export(monkeypatch, destination)
-    context.window._export_soundboard()
+    context.window._export_legacy_soundboard()
     drain(context)
     exported = packages.validate_package_directory(destination)
     assert exported.settings["schema_version"] == 2

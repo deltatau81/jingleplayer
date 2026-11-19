@@ -58,7 +58,7 @@ bis zum nächsten Preset-Wechsel/Neustart sichtbar bleiben, wenn die Quelle vers
 Schema-2-Paketsnapshots lassen `background_image` bewusst weg. Ein neuer Import
 hat kein Bild; Ersetzen eines aktiven Presets entfernt dessen Hintergrundfeld,
 behält aber dessen ID/Name. Andere Presets behalten ihre Zuordnungen. Externe
-Bilddateien und Paketformat bleiben unangetastet. Bildmitnahme folgt in Phase 18D.
+Bilddateien bleiben unverändert. Der normale ZIP-Export nimmt sie seit Phase 18D mit; das alte Ordnerformat enthält weiterhin keine Bilder.
 
 Eine Hauptdatei: `~/.jingleplayer/jingleplayer_settings.json`, lokal `schema_version: 3`.
 
@@ -80,13 +80,31 @@ Bei `saved`/`indeterminate` nach einem Speicherfehler blockiert die Anwendung we
 
 ## Portable Pakete
 
-Paketversion 1 und dessen Schema-2-Boarddaten bleiben unverändert. Export umfasst ausschließlich das aktive Preset mit allen 50 Slots. Globale Werte werden für die Kompatibilität mitgegeben; der Empfänger behält seine lokalen Werte. Fehlende Dateien können weiterhin ausdrücklich nur in der Exportkopie ausgelassen werden.
+Der normale Export verwendet das ZIP-Paketformat Version 3 unabhängig vom internen
+Preset-Schema 3. `manifest.json` enthält `package_version`, `name`, `settings`
+(das vollständige Schema-3-Dokument mit allen Presets) und `assets`. Jeder
+Medieneintrag hat `path`, `kind` (`audio` oder `background`), `size` und
+`sha256`. Referenzen sind relative Vorwärtsslash-Pfade unter `audio/` und
+`backgrounds/`. `last_folder` ist im Paket leer. Alle 50 Slots und vollständigen
+Pools einschließlich manueller Auswahl bleiben erhalten.
+
+Import fügt alle Presets hinzu, vergibt neue UUIDs und nummeriert Namenskonflikte
+nach NFC/Casefold. Die Quell-Auswahl wird auf die neue aktive UUID abgebildet.
+Globale Einstellungen des Empfängers bleiben erhalten. Medien liegen dauerhaft in
+`<settings-ordner>/imported_soundboards/<paketname>-<uuid>/`. Ordnernamen sind
+bereinigt, gleiche Dateinamen werden nummeriert, wiederholte Referenzen auf denselben
+Quellpfad einmal kopiert. Gleicher Inhalt unter verschiedenen Quellpfaden muss nicht
+dedupliziert werden. Es gibt keine Medienlöschung beim Löschen eines Presets.
+
+Der alte Export ist als **Einzelboard exportieren (altes Format)...** weiterhin
+verfügbar. Paketversion 1 mit Settings-Schema 2 bleibt unverändert; die folgenden
+Hinzufügen-/Ersetzen-Regeln gelten für **Alten Paketordner importieren...**.
 
 Import bietet **Als neues Preset** (neue UUID, eindeutiger vom Benutzer gewählter Name) oder **Aktives Preset ersetzen** (bestehende lokale UUID und Name bleiben erhalten). Andere Presets werden nie durch den einzelnen Import ersetzt. Die bestehende Vorschau, Assetprüfung, SHA-256-Hashes, Link-/Junction-Abweisung und sichere Libraryveröffentlichung bleiben erhalten.
 
 Vor dem Import werden aktuelle bestätigte Änderungen gesichert und das aktuelle Persistenztoken festgehalten. Spätere konkurrierende Saves führen zum Konflikt. Der Import sichert die kompletten vorherigen Settingsbytes unter `import-recovery/import-<uuid>/` und prüft Recovery und installierte Assets noch unmittelbar vor dem Settingscommit unter der Sperre. Bei Fehlern vor Commit bleibt das Dokument unverändert; unsichere/neue Assets und Recoverydaten werden nicht blind gelöscht oder automatisch zurückgespielt. Die GUI lädt nach bestätigtem Commit Dokument und aktive Projektion neu.
 
-Details zur Wiederherstellung und zu verbleibenden Vorbereitungspfaden: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). ZIP und portable Mehrdatei-Pools sind noch nicht implementiert.
+Details zu beiden Formaten, Wiederherstellung und verbleibenden Daten: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md).
 
 ## Audio-Pools (Phase 18C)
 
@@ -138,12 +156,23 @@ Die Dateiliste prüft Erreichbarkeit im Qt-Threadpool, ohne Audio zu laden; lauf
 Dateisystemabfragen sind nicht abbrechbar und ihre Anzeige kann zwischenzeitlich
 veralten. Die tatsächliche Wiedergabeprüfung ist weiterhin synchron wie bisher.
 
-Das portable Format bleibt unverändert: Mehrdatei-Pools werden vor dem Export
-abgewiesen, auch in versteckten Slots. Ein-Datei-Pools können als
-Einzeldatei-Audiozuordnung exportiert werden; Poolmodus-Metadaten enthält das alte
-Paketformat nicht. Import enthält keine Pools und entfernt sie nur aus dem explizit
-ersetzten Preset. Andere Presets und die vollständigen Recoverybytes bleiben
-erhalten. Phase 18D erweitert erst die portable Pooldarstellung.
+Das ZIP-Format Version 3 transportiert Pools vollständig. Beim Import werden alle
+Slotpfade, geordneten Poolpfade, manuellen Auswahlen und Hintergrundreferenzen auf
+die installierten lokalen Dateien abgebildet; keine Staging-Pfade werden gespeichert.
+Auswahlstrategien und Laufzeitindex-Regeln bleiben unverändert.
+
+Alte Ordnerpakete enthalten keine Pools. Ihr Import entfernt Poolzuordnungen nur
+aus dem ausdrücklich ersetzten Preset. Der alte Export blockiert Mehrdatei-Pools,
+während Ein-Datei-Pools als Einzeldatei-Audiozuordnung exportiert werden.
+
+Der ZIP-Import validiert zuerst vollständig in `import-staging/`. Eigene Medien
+werden ohne Überschreiben veröffentlicht, dann unter der vorhandenen Settings-Sperre
+einschließlich Fingerprintprüfung, erneuter Medienprüfung und Recoveryprüfung
+aktiviert. Die bisherige Settingsdatei wird bytegenau unter
+`import-recovery/media3-<uuid>/` gesichert. Sicher fehlgeschlagene Commits bereinigen
+eigene Medien. Bei unklarem oder bereits erfolgtem Commit werden Medien erhalten
+und ausdrücklich gemeldet. Recoverydaten bleiben absichtlich erhalten. Keine
+automatische Wiederherstellung und keine garantierte Transaktion über Stromausfälle.
 
 ## Validierung
 

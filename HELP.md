@@ -63,10 +63,9 @@ und Zufallshistorie starten nach Wechsel/Neustart oder Pooländerung neu. Natür
 Soundende startet nie die nächste Datei automatisch. Fadeout, Buttonlautstärke,
 globale Lautstärke und parallele Wiedergabe bleiben verfügbar.
 
-Mehrdatei-Pools sind bis Phase 18D nicht portabel exportierbar. Der Export wird
-vor der Ordnerauswahl mit einer Erklärung abgebrochen, auch bei ausgeblendeten
-Slots. Es gibt keinen unvollständigen Teil-Export. Einzeldatei-Pakete bleiben
-kompatibel; ihr Import enthält keine Poolkonfiguration.
+Pools sind im normalen ZIP-Export vollständig enthalten, einschließlich Reihenfolge,
+Modus und manueller Auswahl. Alle Presets und versteckten Slots werden übertragen.
+Fehlende oder unlesbare Medien brechen den vollständigen Export ab.
 
 ### Hintergrundbild des aktiven Presets
 
@@ -94,9 +93,10 @@ das Menü korrigiert oder entfernt werden. Eine ungültige neu gewählte Datei w
 nicht gespeichert. Unterstützte Grenzen: 32 MiB, 40 Megapixel, höchstens 16384 Pixel
 je Dimension. Sehr große Bilder können beim ersten Laden kurz Rechenzeit benötigen.
 
-Portable Pakete enthalten weiterhin keine Bilder. Import als neues Preset beginnt
-ohne Hintergrund; Ersetzen entfernt das Bild nur beim aktiven Preset. Andere Presets
-bleiben unverändert. Portabler Bildtransport folgt erst in Phase 18D.
+Der normale ZIP-Export enthält auch sämtliche Hintergrundbilder. Bei Import werden
+sie dauerhaft nach `imported_soundboards/<paketname>-<uuid>/backgrounds/` im
+Jingleplayer-Datenordner kopiert. Ihre Cover-Darstellung bleibt unverändert.
+Nur das alte Ordnerformat enthält keine Bilder.
 
 ### Jingle-Kacheln
 
@@ -210,48 +210,59 @@ Auch Fehler beim späteren Speichern werden in einem Fehlerdialog angezeigt.
 
 ## Portable Soundboards exportieren und importieren
 
-Diese Funktionen befinden sich im Menü **Soundboard** der PySide6-Oberfläche.
-Ein Paket enthält die Konfiguration und die referenzierten Audiodateien:
+### Vollständiges ZIP-Medienpaket
 
-```text
-MeinSoundboard/
-  jingleplayer_package.json
-  jingleplayer_settings.json
-  Musik/
-    asset-001.mp3
-    asset-002.wav
-```
+**Soundboard → Soundboard exportieren...** wählen, vorhandenen Ziel-Elternordner
+auswählen und einen neuen Paketnamen eingeben. Es entsteht eine ZIP-Datei;
+vorhandene Ziele werden niemals überschrieben. Sie enthält alle Presets, alle
+50 Slots einschließlich versteckter Belegungen, vollständige Audio-Pools mit
+Reihenfolge/Modus/manueller Auswahl sowie Hintergrundbilder. Fehlende oder
+unlesbare Medien brechen diesen Export vollständig ab; es gibt keinen Teil-Export.
+Originaldateien und aktive Einstellungen bleiben unverändert.
 
-### Export
+Für bisherige relative Einzeldatei-Zuweisungen wird ausdrücklich ein Basisordner
+abgefragt, der zur bisherigen Wiedergabe passen muss. Relative Pool- und Bildpfade
+verwenden weiterhin den Settingsordner. Es wird kein Arbeitsverzeichnis geraten.
 
-**Soundboard exportieren...** wählen, einen vorhandenen Elternordner auswählen
-und einen neuen Paketnamen eingeben. Vorhandene Ziele werden nicht überschrieben.
-Alle **50 Tastenplätze einschließlich ausgeblendeter Belegungen** werden geprüft.
-Bei relativen Audiozuweisungen den ausdrücklich abgefragten Basisordner auswählen.
+**Soundboard → Soundboard importieren...** wählen und eine ZIP-Datei auswählen.
+Die Vorschau nennt Paketname, Presetanzahl, Audio-/Bildanzahl und den dauerhaften
+Zielordner `imported_soundboards/` unter dem bestehenden Datenverzeichnis.
+Nach Bestätigung werden alle Presets hinzugefügt, IDs neu vergeben und
+Namenskonflikte nummeriert. Das im Paket aktive Preset wird ausgewählt.
+Fenstergröße, globale Lautstärke und letzter Audioordner bleiben lokal.
+Die bestätigte Aktivierung stoppt laufende Wiedergaben; danach wird die Oberfläche
+ohne unnötigen Neustart aktualisiert.
 
-Fehlende Dateien werden mit Tastennummer, Beschriftung und Pfad angezeigt. Sie
-können abbrechen oder **Ohne fehlende Dateien exportieren** wählen. Nur die
-Exportkopie verliert dann diese Audiozuweisungen; aktuelle Settings und Originalaudio
-bleiben unverändert. Unlesbare Dateien oder unsichere Pfade werden nicht still
-übersprungen. Zum Neuzuweisen abbrechen und die Tasteneinstellungen verwenden.
+Jeder Import bekommt einen eigenen Ordner:
+`imported_soundboards/<bereinigter-paketname>-<uuid>/` mit `manifest.json`,
+`audio/` und `backgrounds/`. Wiederholter Import überschreibt keine früheren
+Medien. Nach erfolgreichem Import sind ZIP-Datei und ursprüngliche Quellen
+nicht mehr erforderlich, auch nach Neustart. Das Löschen eines Presets löscht
+keine importierten Dateien.
 
-### Import
+Beschädigte Archive, unsichere Pfade, Links, falsche Prüfsummen, ungültige Bilder
+und übergroße Archive werden zurückgewiesen. Bei sicher fehlgeschlagenem Commit
+bleiben bisherige Presets erhalten und eigene neue Mediendaten werden bereinigt.
+Wenn Bereinigung oder Commit-Ausgang unklar sind, nennt die Fehlermeldung
+behaltene Pfade; möglicherweise aktive Dateien werden nicht blind gelöscht.
 
-**Soundboard importieren...** wählen und den vollständigen Paketordner auswählen.
-Nach der Prüfung zeigt die Vorschau Datei- und Tastenzahl. Erst die Bestätigung
-autorisiert das Ersetzen aller Belegungen. Vor der Aktivierung wird die Wiedergabe
-gestoppt. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben
-erhalten. Die aktive Settingsdatei muss bereits existieren.
+### Bisheriges Ordnerformat
 
-Audiodaten werden in einen eigenen Ordner unter `~/.jingleplayer/library/` kopiert;
-der ursprüngliche Paketordner wird danach nicht zur Wiedergabe benötigt. Paketpfade
-verwenden `/` unter `Musik/`; installierte Zuweisungen sind native absolute Pfade.
-ZIP-Pakete und portable Mehrdatei-Pools sind noch nicht implementiert. Lokale Audio-Pools sind verfügbar. Import kann ein neues Preset hinzufügen oder ausdrücklich nur das aktive ersetzen; Export umfasst nur das aktive Preset.
+**Alten Paketordner importieren...** erhält die bisherige Wahl zwischen Hinzufügen
+und ausdrücklichem Ersetzen des aktiven Presets. Das Format ist Paketversion 1 mit
+Settings-Schema 2 und Dateien unter `Musik/`. Auch diese neuen Importe liegen
+unter `imported_soundboards/import-<uuid>/`; ihre innere Struktur bleibt zur
+Kompatibilität erhalten. Bereits vorhandene Library-Zuweisungen werden nicht migriert.
+
+**Einzelboard exportieren (altes Format)...** exportiert weiterhin ausschließlich
+das aktive Board. Bei fehlenden Dateien kann ausdrücklich nur die Exportkopie
+bereinigt werden. Bilder und Mehrdatei-Pools enthält nur das vollständige ZIP-Format.
 
 ### Fehler und Wiederherstellung
 
 Vor dem Settingswechsel entsteht eine separate Kopie unter
-`~/.jingleplayer/import-recovery/import-<uuid>/`. Die dortige
+`~/.jingleplayer/import-recovery/media3-<uuid>/` (ZIP) beziehungsweise
+`import-recovery/import-<uuid>/` (altes Format). Die dortige
 `jingleplayer_settings.json` enthält die ursprünglichen Bytes; `recovery.json`
 nennt unter anderem ursprünglichen Settingspfad, Größe und SHA-256. Das bestehende
 Pre-PySide6-Migrationsbackup wird nicht überschrieben. Erfolgreiche Vorbereitungen

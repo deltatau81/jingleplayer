@@ -202,7 +202,7 @@ def test_export_multi_pool_blocked_before_chooser_including_hidden_slot(board, t
     logic.initialize_settings()
     monkeypatch.setattr(gui.QFileDialog, "getExistingDirectory", lambda *a: pytest.fail("lossy export reached chooser"))
     before = board.active.read_bytes()
-    board.window._export_soundboard()
+    board.window._export_legacy_soundboard()
     assert not board.window._package_busy and board.active.read_bytes() == before
     assert "18D" in board.messages[-1][2]
 

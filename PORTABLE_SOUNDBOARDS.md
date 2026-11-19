@@ -5,10 +5,125 @@ Die Tkinter-Oberfläche hat diese Paketfunktionen nicht. Normale Audiozuweisunge
 dürfen weiterhin beliebige absolute lokale Pfade verwenden; es findet keine
 automatische Umstellung bestehender Soundboards statt.
 
-## Exportieren
+## Vollständiges ZIP-Medienpaket (Phase 18D)
+
+**Soundboard exportieren...** fragt nach Zielordner und neuem Paketnamen und
+erstellt eine neue ZIP-Datei. Exportiert werden alle Presets, alle 50 Slots,
+vollständige geordnete Pools mit Modus/manueller Auswahl und sämtliche Hintergründe.
+Originale, aktive Settings und Wiedergabe werden beim Export nicht geändert.
+Fehlende, unlesbare oder unsichere Dateien brechen den gesamten Export ab.
+Für bisherige relative Einzeldatei-Zuweisungen fragt die GUI ausdrücklich nach
+dem passenden Basisordner. Pool- und Bildpfade verwenden weiterhin den Settingsordner.
+Es wird kein Arbeitsverzeichnis geraten. Die Backend-API verlangt ebenfalls einen
+expliziten absoluten Basisordner; sie entdeckt keinen Datenordner selbst.
+
+**Soundboard importieren...** wählt eine ZIP-Datei. Die Vorschau nennt Paketname,
+Presetanzahl, Audio-/Bildanzahl und den dauerhaften Importordner. Nach Bestätigung
+wird die Wiedergabe für die Aktivierung gestoppt. Alle Presets werden hinzugefügt:
+neue IDs, nummerierte NFC/Casefold-Namenskonflikte und Übernahme der aktiven Auswahl
+aus dem Paket. Lokale Fenstergröße, globale Lautstärke und letzter Ordner bleiben
+erhalten. Nach Erfolg wird die Oberfläche ohne Neustart aktualisiert.
+
+```text
+<bestehendes Jingleplayer-Datenverzeichnis>/
+  jingleplayer_settings.json
+  imported_soundboards/
+    <bereinigter-paketname>-<uuid>/
+      manifest.json
+      audio/
+        intro.wav
+        intro-2.wav
+      backgrounds/
+        bild.png
+  import-staging/
+  import-recovery/
+    media3-<uuid>/
+      jingleplayer_settings.json
+      recovery.json
+```
+
+Jeder Import erhält einen eigenen Ordner, ohne bestehende Medien zu überschreiben.
+Mediennamen und Erweiterungen bleiben möglichst erhalten; unsichere Namen werden
+bereinigt, case-/Unicode-kollidierende Namen nummeriert. Wiederholte Referenzen
+auf denselben Quellpfad werden einmal kopiert. Inhaltlich gleiche Dateien unter
+unterschiedlichen Pfaden müssen nicht dedupliziert werden. Die dauerhaft gespeicherten
+Settings verweisen ausschließlich auf installierte lokale Dateien, niemals auf
+Staging oder ursprüngliche Quellen. Nach erfolgreichem Import dürfen das Archiv
+und die Quellen entfernt werden. Ein Neustart verwendet die installierten Medien.
+Löschen eines Presets löscht keine Medien; automatische Medienbereinigung gibt es nicht.
+
+### Format und Grenzen
+
+Paketversion **3** ist unabhängig vom internen Preset-Schema **3**. Das Manifest ist:
+
+```json
+{
+  "package_version": 3,
+  "name": "Mein Soundboard",
+  "settings": {"schema_version": 3, "...": "vollständiges Preset-Dokument"},
+  "assets": [
+    {"path": "audio/intro.wav", "kind": "audio", "size": 123, "sha256": "64 Kleinbuchstaben-Hexzeichen"}
+  ]
+}
+```
+
+Das Beispiel verkürzt ausschließlich die Settings. Alle Medienreferenzen in den
+Presets sind relative Vorwärtsslash-Pfade. Manifest und ZIP-Inventar müssen exakt
+übereinstimmen; jede Datei ist referenziert und jede Referenz ist deklariert.
+`last_folder` ist im Paket leer. Absolute Pfade, Traversal, Backslashes,
+Windows-reservierte Namen, Kontrollzeichen, Unicode-/Case-Kollisionen, doppelte
+JSON-Schlüssel, widersprüchliche Pools und unbekannte Felder werden zurückgewiesen.
+Nur reguläre Dateien sind zulässig, keine Links, Geräte, Verzeichniseinträge,
+verschlüsselten Einträge oder fremden Zusatzdateien. Audio ist MP3/WAV, Bilder
+PNG/JPEG. Hashes sichern Bytes, nicht die Abspielbarkeit beliebiger Audiodaten.
+
+Limits: Manifest 1 MiB; höchstens 4096 ZIP-Einträge einschließlich Manifest,
+1 GiB je Audiodatei und 5 GiB Medien insgesamt; Kompressionsverhältnis höchstens
+200:1 und begrenztes ZIP-Zentralverzeichnis vor Indexaufbau. Größen werden vor
+und während des Lesens geprüft. ZIP unterstützt STORED und DEFLATE; eigene Exporte
+verwenden STORED. Bilder: 32 MiB, 40 Megapixel, 16384 Pixel je Dimension,
+einschließlich tatsächlicher Decode-Prüfung. Die vorhandene Cover-Darstellung
+und ihr Resize-Cache ändern sich nicht.
+
+### Fehler, Recovery und Grenzen
+
+Export veröffentlicht eine vollständig geprüfte ZIP-Datei atomar ohne Überschreiben.
+Import entpackt in eigene Staging-Verzeichnisse innerhalb des Datenbereichs, prüft
+SHA-256 und Bilder und veröffentlicht erst vollständige Medien. Anschließend
+aktiviert die bestehende Settings-Persistenz unter Sperre mit geladenem Fingerprint.
+Unmittelbar vor dem Settings-Austausch werden installierte Medien und Recovery
+erneut geprüft. Die Recoverydatei enthält die ursprünglichen Settingsbytes;
+`recovery.json` nennt Größe, SHA-256, vorgeschlagenen Settings-Hash und Medienordner.
+
+Bei sicher fehlgeschlagenem Commit bleiben alte Presets unverändert; eigene neue
+Medien und Staging werden bereinigt. Schlägt die sichere Bereinigung fehl, werden
+Restpfade ausdrücklich gemeldet. Recoverydaten werden absichtlich behalten.
+Bei bereits erfolgtem oder unklarem Commit-Ausgang dürfen möglicherweise aktive
+Medien nicht gelöscht werden: gemeldete Dateien bleiben erhalten, die bestehende
+GUI-Behandlung für unklare Speicherzustände sperrt weitere Saves. Niemals blind
+eine Sicherung zurückspielen. Alle Instanzen schließen, aktuellen Zustand separat
+sichern, Settings/Medien und Recoverygröße/-hash prüfen und erst dann manuell
+entscheiden. Eine Wiederherstellung von Settings löscht keine neu importierten Medien.
+
+Keine Garantie für vollständige Crash-/Stromausfall-Durabilität oder für Sicherheit
+gegen feindlichen Austausch vertrauenswürdiger Elternverzeichnisse durch andere
+Prozesse desselben Benutzers. Ein Absturz zwischen Medienveröffentlichung und
+Settings-Commit kann unreferenzierte Dateien hinterlassen. Ältere Anwendungsversionen
+und externe Editoren beachten die Settings-Sperre nicht. Native Windows-/macOS-,
+Bundle-, Hardwareaudio- und Berechtigungstests bleiben zusätzlich notwendig.
+
+## Kompatibilität: altes Ordnerformat
+
+Die folgenden Abschnitte beschreiben ausschließlich das weiterhin unterstützte
+alte Format: **Paketversion 1 mit Settings-Schema 2**. Es wird nicht automatisch
+umgeschrieben. **Alten Paketordner importieren...** behält Hinzufügen/Ersetzen,
+**Einzelboard exportieren (altes Format)...** den bisherigen aktiven Boardexport.
+Bilder und Mehrdatei-Pools werden nur vom neuen vollständigen ZIP-Format transportiert.
+
+## Altes Format: Exportieren
 
 1. Offene Tasten- oder Einstellungsdialoge zuerst speichern oder schließen.
-2. **Soundboard → Soundboard exportieren...** wählen.
+2. **Soundboard → Einzelboard exportieren (altes Format)...** wählen.
 3. Einen vorhandenen übergeordneten Ordner auswählen und anschließend einen
    **neuen Paketnamen** eingeben. Das Paket wird als direkter Unterordner angelegt.
    Vorhandene Ziele werden weder überschrieben noch zusammengeführt. Pfadzeichen,
@@ -86,17 +201,17 @@ Grenzen: je JSON-Datei 1 MiB, höchstens 50 Assets, 1 GiB pro Asset und insgesam
 begrenzt. Unbekannte Paket-/Settingsfelder werden abgelehnt; `last_folder` ist im
 Paket nur leer oder abwesend zulässig und wird vom Export entfernt. Fremde Dateien
 im Paketordner, etwa nachträglich eingefügte Finder-Metadaten, können die Prüfung
-blockieren. ZIP-Pakete und portable Mehrdatei-Pools werden noch nicht unterstützt;
+blockieren. Das alte Ordnerformat unterstützt ZIP und Mehrdatei-Pools nicht;
 lokale Schema-3-Presets unterstützen Audio-Pools. Enthält das aktive Preset einen
 Pool mit mehreren Dateien, wird der Export vor der Ordnerauswahl blockiert, auch
 bei ausgeblendeten Slots. Kein Teil-Export: Die vollständige Mitnahme folgt in
-Phase 18D. Ein-Datei-Pools werden als einzelne Audiozuordnung exportiert. Import
+Paketversion 3. Ein-Datei-Pools werden im alten Format als einzelne Audiozuordnung exportiert. Import
 bisheriger Pakete enthält keine Pools und entfernt nur die Poolzuordnungen des
 ausdrücklich ersetzten Presets; andere Presets bleiben erhalten.
 
-## Importieren
+## Altes Format: Importieren
 
-1. **Soundboard → Soundboard importieren...** wählen und den Paketordner auswählen,
+1. **Soundboard → Alten Paketordner importieren...** wählen und den Paketordner auswählen,
    der `jingleplayer_package.json` enthält. Die aktive Settingsdatei muss bereits
    existieren; bei einer Neuinstallation gegebenenfalls zuerst eine Einstellung speichern.
 2. Die vollständige Prüfung abwarten. Die Vorschau nennt die Zahl der Audiodateien
@@ -120,7 +235,7 @@ Settingsverzeichnis ab (standardmäßig `~/.jingleplayer`):
 ~/.jingleplayer/
   jingleplayer_settings.json
   import-staging/.jingleplayer-import-<zufällig>/...
-  library/import-<uuid>/
+  imported_soundboards/import-<uuid>/
     jingleplayer_package.json
     jingleplayer_settings.json
     Musik/...

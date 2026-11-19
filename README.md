@@ -149,11 +149,10 @@ keine Pools; Löschen entfernt keine Audiodateien. Sequenz- und Zufallszustände
 nur Laufzeitdaten und werden bei Preset-Wechsel, Neustart oder Pooländerung
 zurückgesetzt. Hintergrundbilder, Farben, Lautstärken und alle 50 Slots bleiben erhalten.
 
-**Portable Pakete:** Mehrdatei-Pools blockieren den Export, auch in ausgeblendeten
-Slots. Es gibt keinen Teil-Export. Einzeldateien und Ein-Datei-Pools bleiben im
-bisherigen Paketformat exportierbar. Alte Pakete bleiben importierbar; beim Ersetzen
-entfallen nur die Pools des ersetzten Presets. Vollständige Poolpakete folgen in
-Phase 18D. ZIP wird weiterhin nicht unterstützt.
+**Portable Pakete (Phase 18D):** Der normale ZIP-Export enthält alle Presets,
+alle 50 Slots, vollständige Pools einschließlich Modus und manueller Auswahl sowie
+Hintergrundbilder. Fehlende oder unlesbare Medien brechen den gesamten Export ab.
+Es gibt keinen stillen Teil-Export.
 
 ### Hintergrundbild pro Preset
 
@@ -175,14 +174,34 @@ erhalten, Menüs und Lautstärkeregler liegen außerhalb der Bildfläche. Fehlen
 beschädigte Bilder führen zum normalen Hintergrund mit Statusmeldung; der Pfad
 bleibt gespeichert. Schema 3 bleibt unverändert nummeriert, das Feld ist optional.
 
-Bilder bleiben in Phase 18B lokal: Paketversion 1/Board-Schema 2 enthält weiterhin
-keine Hintergrunddaten. Ein Import als neues Preset startet ohne Bild; Ersetzen des
-aktiven Presets entfernt dessen Hintergrundzuweisung. Andere Presets bleiben
-unverändert. Die portable Bildmitnahme ist für Phase 18D vorgesehen.
+**Soundboard → Soundboard exportieren...**: Ziel-Elternordner auswählen,
+Paketnamen eingeben; es entsteht eine neue ZIP-Datei mit allen Presets und Medien.
+Originaldateien und aktive Einstellungen bleiben unverändert.
 
-Im Menü **Soundboard** stehen **Soundboard exportieren...** und **Soundboard importieren...** bereit. Export: vorhandenen Ziel-Elternordner auswählen, neuen Paketnamen eingeben und gegebenenfalls fehlende Audiozuweisungen ausdrücklich nur für den Export leeren. Alle 50 Plätze einschließlich ausgeblendeter Tasten werden berücksichtigt.
+**Soundboard → Soundboard importieren...**: ZIP-Datei auswählen, Vorschau mit
+Paketname, Presetanzahl sowie Audio-/Bildanzahl prüfen und bestätigen. Alle Presets
+werden mit neuen IDs hinzugefügt; Namenskonflikte erhalten einen Nummernzusatz.
+Die aktive Auswahl aus dem Paket wird übernommen. Lokale Fenstergröße,
+Gesamtlautstärke und letzter Audioordner bleiben erhalten. Vor der Aktivierung
+wird die laufende Wiedergabe ausdrücklich gestoppt.
 
-Import: Paketordner auswählen, Vorschau prüfen und Ersetzen bestätigen. Lokale Fenstergröße, Gesamtlautstärke und der gemerkte Audioordner bleiben erhalten. Vor dem Wechsel wird die Wiedergabe gestoppt; eine separate Wiederherstellungskopie sichert die vorherige Settingsdatei. Der Import kann ein neues Preset hinzufügen oder nach ausdrücklicher Auswahl nur das aktive ersetzen. Exportiert wird ausschließlich das aktive Preset; ZIP und portable Mehrdatei-Pools werden noch nicht unterstützt.
+Die Medien liegen dauerhaft unter dem bestehenden Datenordner:
+`imported_soundboards/<bereinigter-paketname>-<uuid>/audio/` und
+`backgrounds/`, daneben `manifest.json`. Wiederholter Import erzeugt einen
+eigenen Ordner. Nach Import sind die Quellpfade und die ZIP-Datei nicht mehr nötig.
+Das Löschen eines Presets löscht keine Medien.
+
+Paketversion 3 und internes Preset-Schema 3 sind unabhängig. Das ZIP-Manifest
+enthält relative Pfade, Größen und SHA-256-Hashes. Ungültige Pfade, Links,
+widersprüchliche Referenzen, beschädigte Bilder und übergroße Archive werden
+abgewiesen. Bei sicher fehlgeschlagenem Settings-Commit werden eigene neue Medien
+bereinigt; bei unklarem Commit-Ausgang werden sie ausdrücklich gemeldet und
+behalten. Keine automatische Wiederherstellung und keine Crash-Durabilitätsgarantie.
+
+Die bisherigen Ordnerpakete (Paketversion 1 mit Settings-Schema 2) bleiben über
+**Alten Paketordner importieren...** importierbar. **Einzelboard exportieren
+(altes Format)...** erhält den bisherigen Export des aktiven Boards, ohne Bilder
+oder Mehrdatei-Pools. Der normale ZIP-Export unterstützt diese vollständig.
 
 Anleitung, Paketformat, Grenzen bei parallelen Schreibzugriffen und sichere manuelle Wiederherstellung: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). Import bewahrt die übrigen Presets; die Kopie ist keine Garantie für vollständige Ausfallsicherheit.
 
