@@ -1,5 +1,18 @@
 # Release-Vorbereitung 1.1.0-rc1
 
+Linux-Pfadkorrektur nach Release-Workflow `44801607888`: Relative Quellpfade
+bei `--add-data` wurden in die generierte Spec übernommen und von PyInstaller
+gegen `build/linux/spec/` aufgelöst. Dadurch fehlte dort `HELP.md`; derselbe
+Fehler betraf das Icon. `build_linux.sh` bestimmt jetzt einmal den absoluten
+Projektpfad mit `pwd -P` und verwendet ihn für beide Ressourcen, Einstiegspunkt
+und Ausgabepfade. Die Bundle-Ziele `.` und `assets` bleiben unverändert.
+Der Regressionstest erzeugt mit PyInstaller eine verschachtelte Spec bei fremdem
+Arbeitsverzeichnis und Projektpfad mit Leerzeichen und prüft die tatsächliche
+Auflösung beider Datenquellen. Windows, macOS und Workflows bleiben unverändert.
+Lokale Prüfung unter Windows: 808 Tests bestanden, 21 übersprungen; gezielte
+Buildtests 5/5 bestanden. Bash-Syntax und `git diff --check` fehlerfrei. Ein
+nativer Linux-Build muss im Release-Workflow erneut geprüft werden.
+
 Nur `feature/macos-support`. Kein Commit, Push, Tag, Release und keine
 Repository-Metadatenänderung sind Teil dieser Vorbereitung.
 
