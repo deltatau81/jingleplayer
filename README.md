@@ -2,16 +2,16 @@
 
 Jingleplayer ist ein Desktop-Soundboard für Jingles, Veranstaltungen, Podcasts und
 Live-Einsätze mit Python, PySide6 und pygame. Zielversion: **1.1.0-rc1**.
-Der Release Candidate ist vorbereitet, aber noch nicht veröffentlicht.
+Der Release Candidate ist vorbereitet, aber **noch nicht veröffentlicht**.
 
 ## Funktionen
 
-- Bis zu 50 dauerhaft gespeicherte Buttons in fünf konfigurierbaren Reihen.
+- Bis zu 50 dauerhaft gespeicherte Buttons **pro Preset** in fünf konfigurierbaren Reihen.
 - Mehrere unabhängige Presets mit eigenem Layout, Fadeout und Hintergrundbild.
 - MP3/WAV, parallele Wiedergabe und individuelle Lautstärke von −10 bis +10 dB.
 - Audio-Pools mit sequenzieller, zufälliger oder manueller Dateiauswahl.
 - Halbtransparente Buttons mit individuell farbigen Rahmen.
-- Vollständige portable ZIP-Pakete mit allen Presets, Audio-Pools und Bildern.
+- Vollständige portable Soundboard-ZIP-Pakete mit allen Presets, Audio-Pools und Bildern.
 
 Ein Linksklick startet den Sound; erneutes Klicken stoppt oder blendet ihn aus.
 Rechtsklick öffnet **Jingle bearbeiten**. Natürliches Soundende startet keine
@@ -48,6 +48,10 @@ Fehlende Bilder erzeugen eine Statusmeldung, die Zuordnung bleibt erhalten.
 
 ## Portable Soundboards
 
+Portable Soundboard-ZIP-Pakete enthalten Konfiguration und Medien zum Austausch
+zwischen Jingleplayer-Installationen. Sie werden in der Anwendung importiert und
+sind keine Installationsarchive für das Programm.
+
 **Soundboard → Soundboard exportieren...** erstellt eine neue ZIP-Datei mit allen
 Presets, 50 Slots je Preset, vollständigen Pools und Bildern. Fehlende/unlesbare
 Medien brechen den Export ab. **Soundboard importieren...** zeigt eine Vorschau
@@ -65,15 +69,29 @@ gehören ins neue ZIP-Format. [Formate und Wiederherstellung](PORTABLE_SOUNDBOAR
 
 Die manuell gestartete [Release-Build-Pipeline](.github/workflows/release-build.yml)
 stellt nach erfolgreicher Validierung Archive und SHA256-Dateien als
-GitHub-Actions-Artefakte bereit (14 Tage). Noch keine öffentliche RC-Veröffentlichung.
+GitHub-Actions-Artefakte bereit (14 Tage). Diese Installationsarchive enthalten die
+Anwendung; sie sind von den oben beschriebenen portablen Soundboard-ZIP-Paketen
+zu unterscheiden. Es gibt weiterhin keine öffentliche RC-Veröffentlichung.
+
+Der [GitHub-Actions-Lauf 44813599453](https://github.com/deltatau81/jingleplayer/actions/runs/44813599453)
+war erfolgreich: alle acht Jobs sowie die Integritäts- und SHA256-Prüfungen der
+vier Release-Archive für Windows x86_64, Linux x86_64, macOS arm64 und macOS x86_64.
+Diese automatisierte Validierung ersetzt keine nativen GUI-/Audioprüfungen.
+
 Alle Builds sind ohne Herausgeberzertifikat; macOS ist nicht notarisiert.
 Architektur, Systemvoraussetzungen, Buildbefehle und Prüfschritte: [RELEASE.md](RELEASE.md).
 
-| Plattform | Paket und Start |
+Im Bereich **Artifacts** dieses Laufs das zur Plattform und Architektur passende
+Artefakt herunterladen und zunächst den GitHub-Artefaktcontainer entpacken.
+Darin liegen das eigentliche Installationsarchiv und seine `.sha256`-Datei.
+Die SHA256-Prüfsumme vor dem Entpacken des Installationsarchivs vergleichen;
+Prüfbefehle stehen in [RELEASE.md](RELEASE.md). Anschließend wie folgt starten:
+
+| Plattform | Installationsarchiv und Start |
 | --- | --- |
-| Windows x86_64 | ZIP entpacken, `Jingleplayer.exe` starten; kein Python erforderlich |
-| macOS arm64 / x86_64 | Passendes ZIP entpacken, `Jingleplayer.app` nach Programme kopieren |
-| Linux x86_64 | tar.gz vollständig entpacken, `./Jingleplayer/Jingleplayer` starten |
+| Windows x86_64 | Installations-ZIP entpacken und `Jingleplayer.exe` per Doppelklick starten; kein Python erforderlich |
+| macOS arm64 / x86_64 | Zur Architektur passendes ZIP entpacken (arm64 für Apple Silicon, x86_64 für Intel), `Jingleplayer.app` nach Programme kopieren und dort öffnen |
+| Linux x86_64 | tar.gz vollständig entpacken, im Terminal in den Entpackordner wechseln und `./Jingleplayer/Jingleplayer` starten; den gesamten Ordner `Jingleplayer` zusammenhalten |
 
 macOS kann das nicht notarisierte Bundle blockieren. Nur einen geprüften Download
 über Finder → Öffnen bzw. die Sicherheitseinstellungen freigeben; keine pauschale
@@ -81,7 +99,7 @@ Deaktivierung von Gatekeeper. Native GUI-/Audioprüfungen auf macOS/Linux stehen
 
 ## Bedienung und Einstellungen
 
-**Einstellungen** konfiguriert Fadeout, 0−10 sichtbare Buttons je Reihe und
+**Einstellungen** konfiguriert Fadeout, 0–10 sichtbare Buttons je Reihe und
 Buttonhöhe. Mindestens ein Button bleibt sichtbar. Gesamtlautstärke: 0–100 %.
 **Hilfe** öffnet das gebündelte [Benutzerhandbuch](HELP.md).
 
