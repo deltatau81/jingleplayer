@@ -2,7 +2,7 @@
 
 Jingleplayer ist ein Desktop-Soundboard für Jingles, Veranstaltungen, Podcasts und
 Live-Einsätze mit Python, PySide6 und pygame. Zielversion: **1.1.0-rc1**.
-Der Release Candidate ist vorbereitet, aber **noch nicht veröffentlicht**.
+Der Release Candidate ist veröffentlicht.
 
 ## Funktionen
 
