@@ -212,6 +212,10 @@ def test_save_failure_preserves_original_and_backup_and_cleans_temp(tmp_path, mo
 @pytest.mark.parametrize("change", ["modify", "delete", "recreate", "replace_same_bytes"])
 def test_conflicts_after_load(tmp_path, change):
     path, raw = source(tmp_path)
+    if change == "recreate":
+        # Pin the original inode before loading: unlink/recreate may otherwise
+        # recycle it within the same filesystem timestamp tick on Linux.
+        os.link(path, tmp_path / "retained-original.json")
     loaded = storage.load_preset_settings(path)
     if change == "modify":
         path.write_bytes(b"other writer")
@@ -220,6 +224,7 @@ def test_conflicts_after_load(tmp_path, change):
     elif change == "recreate":
         path.unlink()
         path.write_bytes(raw)
+        assert (path.stat().st_dev, path.stat().st_ino) != loaded.fingerprint.identity[:2]
     else:
         new = tmp_path / "replacement.json"
         new.write_bytes(raw)
@@ -230,6 +235,72 @@ def test_conflicts_after_load(tmp_path, change):
     assert caught.value.code == "conflict"
     assert (path.read_bytes() if path.exists() else None) == before
     assert not list(tmp_path.glob("*.pre-presets.*.json"))
+
+
+@pytest.fixture
+def identical_stat_timestamps(monkeypatch):
+    """Model rapid operations observed within one filesystem timestamp tick."""
+    real_stat, real_fstat = storage._stat, storage.os.fstat
+
+    class SameTimestamps:
+        st_mtime_ns = st_ctime_ns = 1_000_000_000
+        st_birthtime_ns = None
+
+        def __init__(self, info):
+            self.info = info
+
+        def __getattr__(self, name):
+            return getattr(self.info, name)
+
+    monkeypatch.setattr(storage, "_stat", lambda *a, **kw: SameTimestamps(real_stat(*a, **kw)))
+    monkeypatch.setattr(storage.os, "fstat", lambda fd: SameTimestamps(real_fstat(fd)))
+
+
+@pytest.mark.parametrize("change", ["recreate", "replace_same_bytes"])
+def test_rapid_identical_content_replacements_with_identical_timestamps(
+    tmp_path, identical_stat_timestamps, change
+):
+    path, raw = source(tmp_path)
+    for iteration in range(16):
+        retained = tmp_path / f"retained-{iteration}.json"
+        # Create before the load so hard-link metadata changes cannot be the
+        # reason a stale token is rejected. Keeping it prevents inode reuse.
+        os.link(path, retained)
+        loaded = storage.load_preset_settings(path)
+        if change == "recreate":
+            path.unlink()
+            path.write_bytes(raw)
+        else:
+            replacement = tmp_path / "replacement.json"
+            replacement.write_bytes(raw)
+            os.replace(replacement, path)
+        current = storage.load_preset_settings(path)
+        assert current.original_bytes == loaded.original_bytes
+        assert current.fingerprint.sha256 == loaded.fingerprint.sha256
+        assert current.fingerprint.identity[2:] == loaded.fingerprint.identity[2:]
+        assert current.fingerprint.identity[:2] != loaded.fingerprint.identity[:2]
+        with pytest.raises(storage.PresetStorageError) as caught:
+            storage.save_preset_settings(path, changed(loaded), expected=loaded)
+        assert caught.value.code == "conflict"
+        assert path.read_bytes() == raw
+        assert not list(tmp_path.glob("*.pre-presets.*.json"))
+        retained.unlink()
+
+
+def test_same_size_edit_with_identical_timestamps_is_a_conflict(
+    tmp_path, identical_stat_timestamps
+):
+    path, raw = source(tmp_path)
+    loaded = storage.load_preset_settings(path)
+    edited = raw.replace(b"Slot 0", b"Edit 0", 1)
+    assert edited != raw and len(edited) == len(raw)
+    path.write_bytes(edited)
+    current = storage.load_preset_settings(path)
+    assert current.fingerprint.identity == loaded.fingerprint.identity
+    assert current.fingerprint.sha256 != loaded.fingerprint.sha256
+    with pytest.raises(storage.PresetStorageError) as caught:
+        storage.save_preset_settings(path, changed(loaded), expected=loaded)
+    assert caught.value.code == "conflict" and path.read_bytes() == edited
 
 
 def test_initialized_missing_file_conflicts_with_external_creation(tmp_path):

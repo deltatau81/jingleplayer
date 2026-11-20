@@ -1,5 +1,56 @@
 # Release-Vorbereitung 1.1.0-rc1
 
+## Preset-Konflikttest nach Linux-Run 44812198703
+
+Untersucht auf `feature/macos-support`, Ausgangscommit `97b01c5`.
+`_read` erfasst Existenz, Device-ID, Inode/File-ID, Größe, `mtime_ns`, `ctime_ns`,
+optionales `birthtime_ns` und SHA256. `_check_expected` vergleicht zusätzlich die
+Originalbytes. Der Vergleich erfolgt vor dem Schreiben und erneut vor Replace.
+Es fehlt kein vorhandenes Vergleichsmerkmal in der Produktivimplementierung.
+
+Die Annahme des bisherigen `recreate`-Tests war zu stark: Nach dem letzten Unlink
+kann der Inode sofort wiederverwendet werden; bei gleicher Zeitstempelauflösung
+und identischen Bytes können sämtliche beobachteten Merkmale gleich bleiben.
+Nanosekunden als Einheit garantieren keine Nanosekundenauflösung. Für die
+vorliegende Implementierung bedeutet das ausgebliebene Konfliktsignal, dass
+Fingerprint und Bytes gleich verglichen wurden. Die einzelnen CI-Statwerte wurden
+nicht protokolliert; Inode-Recycling mit Zeitstempelgleichheit ist die daraus
+abgeleitete Erklärung, kein separat beobachteter Linux-Metadatenmitschnitt.
+
+Korrektur nur im Test: Ein vor dem Laden angelegter Hardlink hält den ursprünglichen
+Inode im Dateisystem, während der Settingspfad tatsächlich gelöscht und neu
+angelegt wird. Die neue Datei muss daher eine andere Identität haben; dies wird
+explizit geprüft. Der Link wird vor dem Load angelegt, damit seine eigene
+Metadatenänderung nicht versehentlich den erwarteten Konflikt auslöst.
+Die Fälle `modify`, `delete`, `recreate` und `replace_same_bytes` bleiben erhalten.
+
+Zusätzliche Regressionen führen je 16 schnelle Recreate-/Replace-Vorgänge mit
+identischen Bytes und simuliert identischen Stat-Zeitstempeln aus. Trotz gleicher
+Größe/Hashes/Zeitstempel muss die andere Dateiidentität den Save blockieren.
+Ein weiterer Test ändert den Inhalt bei gleicher Größe, Identität und simuliert
+gleichen Zeitstempeln; SHA256/Bytes erkennen weiterhin den Konflikt.
+Keine neuen Skips, keine Wartezeiten und keine Produktionsänderung.
+
+Reproduktion: Unter Windows keine vollständige Metadatenkollision in 200 nativen
+Recreate-Durchläufen; bei gezielt simuliert gleichem Identitätstupel ist der
+unbeobachtbare Austausch reproduzierbar. Kein natives Linux/WSL installiert.
+Die grundsätzliche Snapshot-Grenze bleibt: Werden Inhalt und sämtliche erfassten
+Metadaten/Identität unbemerkt identisch wiederhergestellt, ist ohne zusätzliche
+Dateisystemhistorie keine Unterscheidung möglich. Das ist keine Garantie, jedes
+zwischenzeitliche Ereignis zu erkennen; die vorhandenen OS-Locks koordinieren
+kooperierende Writer. Die Produktion bleibt einschließlich Linux-PyInstaller-
+Ausschluss `pkg_resources`, GUI, Audio und Formaten unverändert.
+
+Quellen: [Python stat-Zeitstempel und Auflösung](https://docs.python.org/3/library/os.html#os.stat_result),
+[Linux unlink und Lebensdauer einer Datei](https://man7.org/linux/man-pages/man2/unlink.2.html).
+
+Prüfergebnisse dieser Korrektur: gezielt 40 bestanden, 1 bestehender Symlink-Skip
+(Windows ohne entsprechende Rechte); vollständige Suite: 813 bestanden,
+21 bestehende Skips, eine pygame/pkg_resources-Deprecation-Warnung.
+`git diff --check` erfolgreich. Lokales vollständiges Log:
+`build/preset-conflict-full-tests.txt`.
+Linux/macOS müssen den stabilisierten Test in der bestehenden CI bestätigen.
+
 Linux-Frozen-Korrektur nach Run `44804714580`, Job `136526492613`:
 `pygame.pkgdata` importiert `pkg_resources` optional. Dessen Aufnahme aktiviert
 PyInstallers `pyi_rth_pkgres`, der schon vor dem Anwendungseinstieg
