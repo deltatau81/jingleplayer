@@ -177,3 +177,7 @@ automatische Wiederherstellung und keine garantierte Transaktion über Stromausf
 ## Validierung
 
 Die Tests decken reine Migration/CRUD, atomare Persistenz, OS-Locks, konkurrierende Writer, Laufzeit- und GUI-CRUD, versteckte Slots, Neustart, Import als neues Preset und Ersetzen sowie aktiven Export und Fehlergrenzen ab. Echte Windows-/macOS-Dialoge, Hardwareaudio einschließlich hörbarer Fadeouts, paketierte EXE/App und native Dateisystemfälle benötigen zusätzlich manuelle Tests. Lokale Windows-Dummy-/Offscreen-Tests sind kein Nachweis eines erfolgreichen macOS-/Linux-CI-Laufs.
+
+## Anwendungsrelease
+
+1.1.0-rc1 ist die Anwendungsfassung; Settings-Schema 3 und Paketversionen bleiben unverändert. Buildstatus und Plattformgrenzen: [RELEASE.md](RELEASE.md).

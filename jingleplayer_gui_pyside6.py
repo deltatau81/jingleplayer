@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from jingleplayer_version import APP_VERSION
 import jingleplayer_logic
 import jingleplayer_packages
 import jingleplayer_media_packages as media_packages
@@ -344,7 +345,7 @@ class JingleTile(QFrame):
             f"{self.display_color.lighter(165 if self.playing else 125).name()};"
             "}"
             "QFrame#jingleTile:focus {"
-            f"border: {6 if self.playing else 3}px dashed {self.display_color.lighter(160).name()};"
+            f"border: {6 if self.playing else 3}px {'dashed' if self.playing else 'solid'} {self.display_color.lighter(160).name()};"
             "}"
         )
 
@@ -593,7 +594,7 @@ class JingleplayerMainWindow(QMainWindow):
 
     def __init__(self, current_settings):
         super().__init__()
-        self.setWindowTitle("Jingleplayer")
+        self.setWindowTitle(f"Jingleplayer {APP_VERSION}")
         self._package_busy = False
         self._settings_writes_blocked = False
         self._restart_required = False
@@ -1683,6 +1684,7 @@ def create_main_window():
 
 def main():
     app = QApplication(sys.argv)
+    app.setApplicationVersion(APP_VERSION)
     window = create_main_window()
     if window is None:
         return 1

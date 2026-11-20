@@ -57,14 +57,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
-Write-Host "[5/6] Alte Build-Artefakte entfernen"
+Write-Host "[5/6] Build-Ausgabepfade pruefen"
 
-if (Test-Path $BuildDir) {
-    Remove-Item $BuildDir -Recurse -Force
-}
-
-if (Test-Path $DistDir) {
-    Remove-Item $DistDir -Recurse -Force
+# Keep other platform outputs and release archives. PyInstaller replaces its own files.
+foreach ($Target in @($BuildDir, $DistDir)) {
+    $Resolved = [System.IO.Path]::GetFullPath($Target)
+    $Expected = [System.IO.Path]::GetFullPath($ProjectRoot) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $Resolved.StartsWith($Expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe build target: $Resolved"
+    }
 }
 
 

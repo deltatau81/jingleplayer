@@ -204,8 +204,7 @@ im Paketordner, etwa nachträglich eingefügte Finder-Metadaten, können die Pr�
 blockieren. Das alte Ordnerformat unterstützt ZIP und Mehrdatei-Pools nicht;
 lokale Schema-3-Presets unterstützen Audio-Pools. Enthält das aktive Preset einen
 Pool mit mehreren Dateien, wird der Export vor der Ordnerauswahl blockiert, auch
-bei ausgeblendeten Slots. Kein Teil-Export: Die vollständige Mitnahme folgt in
-Paketversion 3. Ein-Datei-Pools werden im alten Format als einzelne Audiozuordnung exportiert. Import
+bei ausgeblendeten Slots. Kein Teil-Export im alten Format: Der normale ZIP-Export mit Paketversion 3 nimmt Pools vollständig mit. Ein-Datei-Pools werden im alten Format als einzelne Audiozuordnung exportiert. Import
 bisheriger Pakete enthält keine Pools und entfernt nur die Poolzuordnungen des
 ausdrücklich ersetzten Presets; andere Presets bleiben erhalten.
 
@@ -370,3 +369,7 @@ Vor einer Freigabe auf **Windows und beiden macOS-Architekturen** manuell prüfe
 Bis diese Ergebnisse tatsächlich vorliegen, ist native macOS-/plattformübergreifende
 Freigabereife nicht bestätigt. Auch erfolgreiche Dummy-/Offscreen-Tests ersetzen
 weder echte Audiohardware noch native Dialog- und Bundletests.
+
+## Release Candidate 1.1.0-rc1
+
+Anwendungsfassung, Settings-Schema 3 und Paketformat 3 sind unabhängig. Der neue manuelle Release-Workflow erzeugt versionierte Plattformarchive mit SHA256 ohne Veröffentlichung. Aktueller Build-/Abnahmestand und akzeptiertes macOS-/Linux-Restrisiko: [RELEASE.md](RELEASE.md).

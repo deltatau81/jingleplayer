@@ -106,7 +106,8 @@ def test_main_window_can_be_constructed_and_closed(qt_app, isolated_settings):
     _, initialize_calls, _ = isolated_settings
     window = gui.create_main_window()
 
-    assert window.windowTitle() == "Jingleplayer"
+    from jingleplayer_version import APP_VERSION
+    assert window.windowTitle() == f"Jingleplayer {APP_VERSION}"
     assert gui.resource_path("assets/jingleplayer.ico").is_file()
     assert not window.windowIcon().isNull()
     assert initialize_calls == [True]

@@ -383,6 +383,32 @@ def test_real_canvas_composites_neutral_fill_with_colored_border(context, backgr
     assert border == QColor(tile.display_color.name())  # Stored alpha never makes the border translucent.
 
 
+@pytest.mark.parametrize("finish", ["stop", "natural_end"])
+def test_focused_button_returns_to_solid_border_immediately(context, monkeypatch, finish):
+    window = context.window
+    window.show()
+    window.activateWindow()
+    context.app.processEvents()
+    tile = window.jingle_tiles[0]
+    tile.setFocus()
+    tile.set_playing(True)
+    assert tile.hasFocus() and "6px dashed" in tile.styleSheet()
+    if finish == "stop":
+        context.playing.append(1)
+        window._handle_tile_click(1)
+    else:
+        monkeypatch.setattr(logic, "check_sound_end", lambda: [{"index": 1, "playing": False}])
+        window._poll_sound_end()
+    assert not tile.playing and tile.hasFocus()
+    assert "dashed" not in tile.styleSheet()
+    # Render immediately, without a second button click or focus change.
+    image = tile.grab().toImage()
+    ratio = tile.devicePixelRatioF()
+    expected = QColor(tile.display_color.lighter(160).name())
+    for x in range(15, tile.width() - 15):
+        assert image.pixelColor(round(x * ratio), round(ratio)) == expected
+
+
 def test_rendered_border_states_and_pressed_fill(context, monkeypatch):
     window = context.window
     tile = window.jingle_tiles[0]
@@ -422,7 +448,7 @@ def test_rendered_border_states_and_pressed_fill(context, monkeypatch):
     assert tile.hasFocus()
     focused = window.background_canvas.grab().toImage()
     assert focused != hovered
-    assert "3px dashed" in tile.styleSheet()
+    assert "3px solid" in tile.styleSheet()
     assert pixel(tile.width() / 2, 1) != normal
     QTest.mousePress(tile, Qt.MouseButton.LeftButton)
     assert tile._pressed

@@ -1,285 +1,120 @@
 # Jingleplayer
 
-Jingleplayer is a desktop soundboard and jingle player built with Python, PySide6, and pygame. It provides configurable jingle buttons across up to 50 persistent slots, simultaneous playback, individual jingle volume, fadeout, and persistent settings. This feature branch adds macOS build support and portable directory soundboards; native macOS release validation remains a separate requirement.
+Jingleplayer ist ein Desktop-Soundboard für Jingles, Veranstaltungen, Podcasts und
+Live-Einsätze mit Python, PySide6 und pygame. Zielversion: **1.1.0-rc1**.
+Der Release Candidate ist vorbereitet, aber noch nicht veröffentlicht.
 
-## Project structure
+## Funktionen
 
-- `jingleplayer_app.py` – stable production entry point
-- `jingleplayer_gui_pyside6.py` – production PySide6 interface
-- `jingleplayer_gui_tkinter.py` – legacy/fallback interface
-- `jingleplayer_logic.py` – shared audio and settings logic
-- `jingleplayer_packages.py` – portable directory package validation, export, preparation and disk activation
-- `PORTABLE_SOUNDBOARDS.md` – German export/import, recovery and validation guide
-- `HELP.md` – German user manual bundled with the application
-- `AUDIO_ENGINE.md` – technical audio-engine documentation
-- `build_windows.ps1` – authoritative Windows build procedure
+- Bis zu 50 dauerhaft gespeicherte Buttons in fünf konfigurierbaren Reihen.
+- Mehrere unabhängige Presets mit eigenem Layout, Fadeout und Hintergrundbild.
+- MP3/WAV, parallele Wiedergabe und individuelle Lautstärke von −10 bis +10 dB.
+- Audio-Pools mit sequenzieller, zufälliger oder manueller Dateiauswahl.
+- Halbtransparente Buttons mit individuell farbigen Rahmen.
+- Vollständige portable ZIP-Pakete mit allen Presets, Audio-Pools und Bildern.
 
-## Features
+Ein Linksklick startet den Sound; erneutes Klicken stoppt oder blendet ihn aus.
+Rechtsklick öffnet **Jingle bearbeiten**. Natürliches Soundende startet keine
+weitere Datei. Es gibt keine globale STOP-ALL-Schaltfläche.
 
-### Jingle layout
+## Presets
 
-- Five configurable rows
-- 0–10 visible tiles per row
-- 50 persistent jingle slots in total
-- Custom text, color, audio file, and individual volume for every slot
-- Responsive tile widths and configurable tile height
+Auswahl im Hauptfenster; **Presets → Neu…**, **Duplizieren…**, **Umbenennen…** und
+**Löschen…** verwalten die Boards. Beim Wechsel wird Wiedergabe gestoppt.
+Das letzte Preset bleibt geschützt. Löschen entfernt keine Mediendateien.
+Ausgeblendete Slots bleiben gespeichert. [Details](PRESETS.md).
 
-Reducing the number of visible tiles does not discard hidden slot configurations. Increasing the row counts later restores those slots.
+## Audio-Pools
 
-### Playback
+Im Buttondialog **Audio-Pool** auswählen. **Hinzufügen…**, **Entfernen**,
+**Leeren**, **Nach oben** und **Nach unten** bearbeiten die Liste.
+**Speichern** übernimmt Änderungen, **Abbrechen** verwirft sie.
 
-- MP3 and WAV support
-- Independent simultaneous playback of multiple jingles
-- Independent playback of the same audio file from different tiles
-- Channel-specific fadeout
-- Automatic detection of natural playback completion
-- Sound caching by normalized file path
+- **Sequenziell:** Jeder erfolgreiche Start verwendet die nächste Datei.
+- **Zufällig:** Keine direkte Wiederholung, wenn eine andere Datei abspielbar ist.
+- **Manuell:** Dateiauswahl im Dialog oder direkt am Button; bleibt nach Neustart
+  erhalten. Auswählen startet keinen Sound und ersetzt keinen laufenden Sound.
 
-Left-clicking an inactive tile starts its jingle. Clicking the same tile while it is playing stops or fades only that jingle; other active jingles continue unaffected. An active border represents the playing state and is cleared when playback stops or ends naturally.
+Automatische Modi überspringen unbrauchbare Dateien mit Statusmeldung.
+Manuelle Auswahl wird bei Fehlern nicht still ersetzt.
 
-There is intentionally no global STOP ALL control.
+## Hintergründe und Buttondesign
 
-### Volume and fadeout
-
-The main window provides a global volume slider from 0–100%. Each jingle also has an individual adjustment from -10 dB to +10 dB in its editor. Volume changes are applied to already running channels.
-
-The global fadeout duration is configured in milliseconds and applies when an individual playing tile is stopped.
-
-### Jingle editor
-
-Right-click a tile to edit:
-
-- jingle name/text
-- MP3 or WAV file
-- tile color
-- individual dB adjustment
-
-Audio selection uses the native file dialog. The directory of the most recently browsed audio file is remembered automatically. **Speichern** applies the changes; **Abbrechen**, Escape, and the window close button discard them.
-
-### Settings and help
-
-The **Einstellungen** dialog controls:
-
-- fadeout duration
-- the visible tile count for each of the five rows
-- tile/button height
-
-At least one tile must remain visible. Successfully saved layout changes take effect immediately without restarting the application.
-
-The dialog also opens the bundled `HELP.md` manual. The production settings dialog does not provide controls for changing the settings-file location or configuring a default audio directory.
-
-## Audio engine
-
-The pygame mixer is initialized with:
-
-- 44.1 kHz sample rate
-- signed 16-bit audio
-- stereo output
-- 512-sample buffer
-- 50 mixer channels, matching the maximum persistent slot count
-
-For implementation and test details, see `AUDIO_ENGINE.md`.
-
-## Settings and safe migration
-
-Settings are stored at:
-
-```text
-~/.jingleplayer/jingleplayer_settings.json
-```
-
-On Windows this normally resolves to:
-
-```text
-C:\Users\<username>\.jingleplayer\jingleplayer_settings.json
-```
-
-Die lokale Settingsdatei verwendet jetzt `schema_version: 3`: globale Fenstergröße,
-Gesamtlautstärke und Audioordner sowie die Presetliste und die aktive Preset-ID.
-Jedes Preset erhält alle 50 Slots, Texte, Farben, Pfade, dB-Werte, Reihenlayout,
-Fadeout und Kachelhöhe. Die Auswahl im Hauptfenster und das Menü **Presets** bieten
-Erstellen, Duplizieren, Umbenennen und Löschen. Das letzte Preset ist geschützt;
-beim Löschen des aktiven Presets wird ein Nachfolger ausgewählt.
-
-Schema 2 und unterstützte ältere Settings werden beim Laden nur im Speicher in
-ein Standard-Preset migriert. Erst ein tatsächlicher Save schreibt Schema 3 und
-legt vorher ein bytegenaues Backup an:
-
-```text
-jingleplayer_settings.json.pre-presets.<SHA256>.json
-```
-
-Bestehende Pre-PySide6-Backups bleiben unverändert. Fehlerhafte oder unbekannte
-Felder werden nicht still verworfen, sondern blockieren die Migration. Die alte
-v1.0.0-Anwendung kann Schema 3 nicht laden; für einen Rückwechsel ist die geprüfte
-Pre-Preset-Sicherung nötig. [Preset-Details und Wiederherstellung](PRESETS.md).
-
-Corrupt or structurally invalid settings are not overwritten. Unsupported future schema versions block startup instead of being replaced. Load and save failures are reported through GUI error dialogs.
-
-No fallback settings directory is used.
+**Presets → Hintergrundbild auswählen…** lädt PNG/JPEG für das aktive Preset.
+**Hintergrundbild entfernen** löscht nur die Zuordnung. Das Bild füllt den
+Kachelbereich proportional mit mittigem Beschnitt. Die dunkle halbtransparente
+Buttonfläche lässt das Bild durchscheinen; individuelle Farben markieren Rahmen.
+Fehlende Bilder erzeugen eine Statusmeldung, die Zuordnung bleibt erhalten.
 
 ## Portable Soundboards
 
-### Audio-Pools pro Button (Phase 18C)
+**Soundboard → Soundboard exportieren...** erstellt eine neue ZIP-Datei mit allen
+Presets, 50 Slots je Preset, vollständigen Pools und Bildern. Fehlende/unlesbare
+Medien brechen den Export ab. **Soundboard importieren...** zeigt eine Vorschau
+und fügt nach Bestätigung Presets mit neuen IDs und eindeutigen Namen hinzu.
+Lokale Fenstergröße, Gesamtlautstärke und letzter Audioordner bleiben erhalten.
+Medien werden unabhängig vom Quellarchiv dauerhaft unter
+`~/.jingleplayer/imported_soundboards/<paketname>-<uuid>/` abgelegt.
+Wiederholter Import erstellt einen eigenen Ordner. Preset-Löschung löscht keine Medien.
 
-Rechtsklick auf einen Button öffnet **Jingle bearbeiten**. Unter **Audioquelle /
-Pool** zwischen **Einzeldatei** und **Audio-Pool** wählen. **Hinzufügen…** nimmt
-mehrere MP3/WAV-Dateien auf; **Entfernen**, **Leeren**, **Nach oben** und **Nach
-unten** bearbeiten nur den Entwurf. **Speichern** übernimmt alles atomar,
-**Abbrechen** verwirft es. Leeren und Speichern entfernt die Audiozuordnung,
-aber niemals Audiodateien. Die Liste zeigt vollständige Pfade und markiert
-fehlende/nicht erreichbare Dateien nach einer Hintergrundprüfung.
+Das bisherige Ordnerformat bleibt über **Alten Paketordner importieren...** und
+**Einzelboard exportieren (altes Format)...** verfügbar. Mehrdatei-Pools und Bilder
+gehören ins neue ZIP-Format. [Formate und Wiederherstellung](PORTABLE_SOUNDBOARDS.md).
 
-- **Sequenziell:** Pro erfolgreichem Start eine Datei weiter, nach der letzten
-  wieder die erste. Stoppen und natürliches Ende starten keine weitere Datei.
-- **Zufällig:** Keine direkte Wiederholung, solange eine andere Datei abspielbar
-  ist. Fehlgeschlagene Starts ändern die letzte erfolgreiche Auswahl nicht.
-- **Manuell:** Im Dialog die gewünschte Datei markieren oder die kompakte
-  Dateiauswahl direkt auf der Kachel verwenden. Auswahl allein startet nichts;
-  Linksklick startet/stoppt wie bisher. Die Auswahl bleibt nach Neustart erhalten.
+## Installation
 
-Automatische Modi überspringen fehlende und nicht ladbare Dateien; die Statuszeile
-nennt übersprungene Einträge. Sind alle unbrauchbar, erscheint ein Fehler. Manuell
-wird eine nicht abspielbare Auswahl niemals still ersetzt. Konfigurationen und
-Dateipfade bleiben dabei gespeichert. Änderungen wirken beim nächsten Start;
-bereits laufende Sounds werden durch Dateiauswahl oder Poolbearbeitung nicht ersetzt.
+Die manuell gestartete [Release-Build-Pipeline](.github/workflows/release-build.yml)
+stellt nach erfolgreicher Validierung Archive und SHA256-Dateien als
+GitHub-Actions-Artefakte bereit (14 Tage). Noch keine öffentliche RC-Veröffentlichung.
+Alle Builds sind ohne Herausgeberzertifikat; macOS ist nicht notarisiert.
+Architektur, Systemvoraussetzungen, Buildbefehle und Prüfschritte: [RELEASE.md](RELEASE.md).
 
-Pools gehören zum Preset und werden vollständig dupliziert. Neue Presets haben
-keine Pools; Löschen entfernt keine Audiodateien. Sequenz- und Zufallszustände sind
-nur Laufzeitdaten und werden bei Preset-Wechsel, Neustart oder Pooländerung
-zurückgesetzt. Hintergrundbilder, Farben, Lautstärken und alle 50 Slots bleiben erhalten.
+| Plattform | Paket und Start |
+| --- | --- |
+| Windows x86_64 | ZIP entpacken, `Jingleplayer.exe` starten; kein Python erforderlich |
+| macOS arm64 / x86_64 | Passendes ZIP entpacken, `Jingleplayer.app` nach Programme kopieren |
+| Linux x86_64 | tar.gz vollständig entpacken, `./Jingleplayer/Jingleplayer` starten |
 
-**Portable Pakete (Phase 18D):** Der normale ZIP-Export enthält alle Presets,
-alle 50 Slots, vollständige Pools einschließlich Modus und manueller Auswahl sowie
-Hintergrundbilder. Fehlende oder unlesbare Medien brechen den gesamten Export ab.
-Es gibt keinen stillen Teil-Export.
+macOS kann das nicht notarisierte Bundle blockieren. Nur einen geprüften Download
+über Finder → Öffnen bzw. die Sicherheitseinstellungen freigeben; keine pauschale
+Deaktivierung von Gatekeeper. Native GUI-/Audioprüfungen auf macOS/Linux stehen aus.
 
-### Hintergrundbild pro Preset
+## Bedienung und Einstellungen
 
-Im Menü **Presets → Hintergrundbild auswählen…** ein PNG/JPEG auswählen. Das Bild
-wird sofort für das aktive Preset gespeichert und hinter dessen Jingle-Kacheln
-angezeigt. **Hintergrundbild entfernen** stellt die bisherige Darstellung wieder
-her und löscht keine Bilddatei. Im Menü steht der aktuell gespeicherte Bildpfad.
-Preset-Wechsel und Neustart übernehmen die jeweilige Einstellung automatisch.
+**Einstellungen** konfiguriert Fadeout, 0−10 sichtbare Buttons je Reihe und
+Buttonhöhe. Mindestens ein Button bleibt sichtbar. Gesamtlautstärke: 0–100 %.
+**Hilfe** öffnet das gebündelte [Benutzerhandbuch](HELP.md).
 
-Die Darstellung füllt den Kachelbereich proportional aus und beschneidet mittig;
-Resize skaliert das bereits geladene Bild anhand der aktuellen Hintergrundfläche.
-Alle Kacheln haben dieselbe neutrale Innenfläche (`rgba(15, 18, 22, 90)`, etwa
-35 % Deckkraft). Individuelle Farben erscheinen nur im deckenden, 3 Pixel breiten
-Rahmen und bleiben unverändert gespeichert. Die Schrift ist weiß mit dunklem
-Schatten. Hover verbreitert und erhellt den Rahmen; Fokus zeigt einen gestrichelten
-Rahmen, Drücken dunkelt die Fläche ab. Wiedergabe zeigt einen helleren, breiten
-Doppelrahmen, bei Fokus einen breiten gestrichelten Rahmen. Buttonnummern und Bedienung bleiben
-erhalten, Menüs und Lautstärkeregler liegen außerhalb der Bildfläche. Fehlende oder
-beschädigte Bilder führen zum normalen Hintergrund mit Statusmeldung; der Pfad
-bleibt gespeichert. Schema 3 bleibt unverändert nummeriert, das Feld ist optional.
+Daten liegen unter `~/.jingleplayer/`, auf Windows gewöhnlich
+`C:\Users\<Benutzer>\.jingleplayer\`. Bundle und Programmordner dienen nur zum Lesen.
+Settings, Importmedien, Staging und Recovery liegen im Benutzerdatenverzeichnis.
+Es gibt keinen stillen Ausweichordner bei Schreibfehlern.
 
-**Soundboard → Soundboard exportieren...**: Ziel-Elternordner auswählen,
-Paketnamen eingeben; es entsteht eine neue ZIP-Datei mit allen Presets und Medien.
-Originaldateien und aktive Einstellungen bleiben unverändert.
+Anwendungsfassung **1.1.0-rc1**, internes **Settings-Schema 3** und **ZIP-Paketformat 3**
+sind unabhängig. Alte Ordnerpakete verwenden **Paketformat 1 mit Settings-Schema 2**.
+Vor dem ersten tatsächlichen Save einer migrierten Settingsdatei entsteht ein
+bytegenaues `jingleplayer_settings.json.pre-presets.<SHA256>.json`-Backup.
+Version 1.0.0 kann Schema 3 nicht lesen. Beschädigte/neue unbekannte Settings werden
+nicht überschrieben. [Migration und Konflikte](PRESETS.md).
 
-**Soundboard → Soundboard importieren...**: ZIP-Datei auswählen, Vorschau mit
-Paketname, Presetanzahl sowie Audio-/Bildanzahl prüfen und bestätigen. Alle Presets
-werden mit neuen IDs hinzugefügt; Namenskonflikte erhalten einen Nummernzusatz.
-Die aktive Auswahl aus dem Paket wird übernommen. Lokale Fenstergröße,
-Gesamtlautstärke und letzter Audioordner bleiben erhalten. Vor der Aktivierung
-wird die laufende Wiedergabe ausdrücklich gestoppt.
+## Entwicklung und Tests
 
-Die Medien liegen dauerhaft unter dem bestehenden Datenordner:
-`imported_soundboards/<bereinigter-paketname>-<uuid>/audio/` und
-`backgrounds/`, daneben `manifest.json`. Wiederholter Import erzeugt einen
-eigenen Ordner. Nach Import sind die Quellpfade und die ZIP-Datei nicht mehr nötig.
-Das Löschen eines Presets löscht keine Medien.
-
-Paketversion 3 und internes Preset-Schema 3 sind unabhängig. Das ZIP-Manifest
-enthält relative Pfade, Größen und SHA-256-Hashes. Ungültige Pfade, Links,
-widersprüchliche Referenzen, beschädigte Bilder und übergroße Archive werden
-abgewiesen. Bei sicher fehlgeschlagenem Settings-Commit werden eigene neue Medien
-bereinigt; bei unklarem Commit-Ausgang werden sie ausdrücklich gemeldet und
-behalten. Keine automatische Wiederherstellung und keine Crash-Durabilitätsgarantie.
-
-Die bisherigen Ordnerpakete (Paketversion 1 mit Settings-Schema 2) bleiben über
-**Alten Paketordner importieren...** importierbar. **Einzelboard exportieren
-(altes Format)...** erhält den bisherigen Export des aktiven Boards, ohne Bilder
-oder Mehrdatei-Pools. Der normale ZIP-Export unterstützt diese vollständig.
-
-Anleitung, Paketformat, Grenzen bei parallelen Schreibzugriffen und sichere manuelle Wiederherstellung: [Portable Soundboards](PORTABLE_SOUNDBOARDS.md). Import bewahrt die übrigen Presets; die Kopie ist keine Garantie für vollständige Ausfallsicherheit.
-
-## Requirements
-
-Runtime dependencies include PySide6 and pygame:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-Install development and test dependencies with:
-
-```powershell
-python -m pip install -r requirements-dev.txt
-```
-
-## Starting from source
-
-From the project directory, run the stable product entry point:
-
-```powershell
+```text
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python jingleplayer_app.py
+python -m pytest -q -ra
 ```
 
-## Automated tests
+Produkt-Einstieg: `jingleplayer_app.py`; produktive GUI: `jingleplayer_gui_pyside6.py`;
+Audio/Settings: `jingleplayer_logic.py`. Die Tkinter-GUI ist historisch.
+PyInstaller 6.16.0 ist bereits als Buildwerkzeug vorgegeben; keine zweite Infrastruktur.
+[Audioengine](AUDIO_ENGINE.md), [Release Notes](RELEASE_NOTES_v1.1.0-rc1.md).
 
-Run the complete regression suite with:
+## Bekannte Einschränkungen
 
-```powershell
-python -m pytest -q
-```
-
-The suite covers audio logic, settings persistence and migration, volume behavior, the PySide6 interface, and the product/build entry points. The real audio smoke test remains a separate interactive Windows test.
-
-The automatic test workflow is configured for Ubuntu and Windows with Python 3.11/3.13, plus macOS with Python 3.11. It uses offscreen Qt and dummy SDL drivers; real audio hardware is not tested. The separate manually dispatched macOS workflow retains its native arm64/x86_64 builds and artifact names. Workflow configuration alone does not establish a successful CI run. See the [validation checklist](PORTABLE_SOUNDBOARDS.md#validierung-und-freigabe) for native manual checks and platform-specific skips.
-
-## Windows build
-
-The authoritative Windows build procedure is:
-
-```powershell
-.\build_windows.ps1
-```
-
-The script runs syntax checks and the automated test suite before creating the windowed onefile application:
-
-```text
-dist\Jingleplayer.exe
-```
-
-The root-level historical `.spec` files are not the authoritative build procedure.
-
-## Changing the application icon
-
-The application icon is:
-
-```text
-assets\jingleplayer.ico
-```
-
-To use another icon:
-
-1. Create or obtain a Windows `.ico` file.
-2. Replace `assets\jingleplayer.ico` with the new file.
-3. Keep the filename `jingleplayer.ico`.
-4. Rebuild the application:
-
-   ```powershell
-   .\build_windows.ps1
-   ```
-
-The resulting executable is:
-
-```text
-dist\Jingleplayer.exe
-```
-
-The same icon file is used by the PySide6 application window and the packaged Windows executable. For good results at different display scales, use a multi-resolution ICO containing common sizes such as 16x16, 32x32, 48x48, 128x128, and 256x256.
-
-Windows may cache executable icons, so File Explorer or the taskbar may temporarily continue to display the previous icon after replacement.
+Automatische Tests nutzen Offscreen-Qt und SDL-Dummytreiber; sie bestätigen keine
+Hardwareaudioqualität oder nativen Dialoge. Windows: laut Phase-18D-Abnahme 9/9
+manuelle Import-/Export-/Audioprüfungen bestanden. Native macOS-/Linux-GUI- und
+Audioprüfungen sind akzeptiertes Restrisiko, keine durchgeführten Tests.
+Keine Codesignierung/Notarisierung oder garantierte Crash-Durabilität.
+Recovery enthält Settings, keine Sicherung zuvor externer Medien.

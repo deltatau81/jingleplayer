@@ -82,7 +82,7 @@ Alle Kacheln haben eine neutrale, dunkle Innenfläche mit etwa 35 % Deckkraft.
 Eigene Buttonfarben bleiben gespeichert und färben nur den deckenden, 3 Pixel
 breiten Rahmen. Das Bild scheint durch die Buttonreihen hindurch. Weiße Texte
 mit dunklem Schatten bleiben lesbar. Hover macht den Rahmen heller und breiter;
-Fokus zeigt einen gestrichelten Rahmen, Drücken dunkelt die Fläche ab. Wiedergabe
+Fokus zeigt einen helleren Rahmen, Drücken dunkelt die Fläche ab. Wiedergabe
 zeigt einen breiten Doppelrahmen, bei Fokus einen breiten gestrichelten Rahmen.
 Buttonfarben, Texte und Klicks bleiben erhalten; der Spielindikator kontrastiert
 mit der Buttonfarbe. Lautstärkeregler, Menüs und Dialoge werden nicht überlagert.
@@ -175,13 +175,13 @@ Der Einstellungsdialog enthält keine Felder zum Ändern des Settings-Speicheror
 
 ## Einstellungen und Datensicherheit
 
-Die Konfiguration wird normalerweise hier gespeichert:
+Die Konfiguration liegt auf allen Plattformen unter `~/.jingleplayer/jingleplayer_settings.json`, unter Windows normalerweise hier:
 
 ```text
 C:\Users\<Benutzer>\.jingleplayer\jingleplayer_settings.json
 ```
 
-Jingleplayer verwendet lokal Settingsschema 3. Portable Pakete verwenden weiterhin Paketversion 1 und Board-Schema 2. Gespeichert werden unter anderem:
+Jingleplayer 1.1.0-rc1 verwendet lokal Settingsschema 3. Der normale ZIP-Export verwendet Paketversion 3; nur das alte Ordnerformat verwendet Paketversion 1 mit Board-Schema 2. Gespeichert werden unter anderem:
 
 - Texte, Farben und Audiodateien aller 50 Jingle-Plätze
 - individuelle Jingle-Lautstärken
@@ -344,6 +344,6 @@ Normalerweise wird die aktive Umrandung beim Stoppen oder natürlichen Ende auto
 
 Jingleplayer verwendet pygame für die Audiowiedergabe und PySide6 für die Benutzeroberfläche. Laufende Jingles werden über getrennte Mixer-Kanäle verwaltet, sodass sie gleichzeitig abgespielt und unabhängig voneinander gestoppt oder ausgeblendet werden können.
 
-**Stand:** September 2026
+**Stand:** November 2026
 
-**Anwendung:** Jingleplayer
+**Anwendung:** Jingleplayer 1.1.0-rc1

@@ -1,0 +1,64 @@
+name: Release candidate builds
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/feature/macos-support'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SDL_AUDIODRIVER: dummy
+      SDL_VIDEODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libasound2
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pip check
+      - run: python -m pytest -q -ra --basetemp="${{ runner.temp }}/release-pytest" -p no:cacheprovider
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-22.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      SDL_AUDIODRIVER: dummy
+      SDL_VIDEODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libasound2
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./build_windows.ps1
+      - if: runner.os == 'macOS'
+        run: bash build_macos.sh
+      - if: runner.os == 'Linux'
+        run: bash build_linux.sh
+      - run: python verify_frozen.py
+      - run: python release_archive.py
+      - id: version
+        shell: bash
+        run: echo "version=$(python -c 'from jingleplayer_version import APP_VERSION; print(APP_VERSION)')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jingleplayer-${{ steps.version.outputs.version }}-${{ matrix.os }}-unsigned
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
