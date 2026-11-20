@@ -1,4 +1,4 @@
-# v1.1.0-rc1 – Entwurf, unveröffentlicht
+# v1.1.0-rc1 – Öffentlicher Prerelease
 
 ## Neue Funktionen
 
@@ -24,14 +24,14 @@ Version 1.0.0 kann Settings-Schema 3 nicht lesen.
 
 ## Installation
 
-Geplante Actions-Artefakte: Windows-x86_64-ZIP, macOS-arm64-/x86_64-ZIP mit `.app`
+Veröffentlichte Installationsarchive: Windows-x86_64-ZIP, macOS-arm64-/x86_64-ZIP mit `.app`
 und Linux-x86_64-tar.gz, jeweils mit SHA256. Keine separate Python-Installation.
 Alle Builds ohne Herausgeberzertifikat, macOS nicht notarisiert.
 Voraussetzungen und Download-/Prüfanleitung: [RELEASE.md](RELEASE.md).
 
 ## Bekannte Einschränkungen
 
-Keine neue öffentliche Veröffentlichung. Native macOS-/Linux-GUI- und Audiotests
+Der Release Candidate ist öffentlich als Prerelease verfügbar. Native macOS-/Linux-GUI- und Audiotests
 stehen aus und sind akzeptiertes Planungsrisiko. Keine garantierte vollständige
 Crash-Durabilität; Recovery und Medien nicht ungeprüft löschen.
 

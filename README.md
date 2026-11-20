@@ -2,7 +2,7 @@
 
 Jingleplayer ist ein Desktop-Soundboard für Jingles, Veranstaltungen, Podcasts und
 Live-Einsätze mit Python, PySide6 und pygame. Zielversion: **1.1.0-rc1**.
-Der Release Candidate ist veröffentlicht.
+Der Release Candidate ist als **öffentlicher Prerelease** veröffentlicht.
 
 ## Funktionen
 
@@ -71,9 +71,9 @@ Die manuell gestartete [Release-Build-Pipeline](.github/workflows/release-build.
 stellt nach erfolgreicher Validierung Archive und SHA256-Dateien als
 GitHub-Actions-Artefakte bereit (14 Tage). Diese Installationsarchive enthalten die
 Anwendung; sie sind von den oben beschriebenen portablen Soundboard-ZIP-Paketen
-zu unterscheiden. Es gibt weiterhin keine öffentliche RC-Veröffentlichung.
+zu unterscheiden. Der Release Candidate ist als öffentlicher GitHub-Prerelease v1.1.0-rc1 verfügbar.
 
-Der [GitHub-Actions-Lauf 44813599453](https://github.com/deltatau81/jingleplayer/actions/runs/44813599453)
+Der [GitHub-Actions-Lauf 44815755125](https://github.com/deltatau81/jingleplayer/actions/runs/44815755125)
 war erfolgreich: alle acht Jobs sowie die Integritäts- und SHA256-Prüfungen der
 vier Release-Archive für Windows x86_64, Linux x86_64, macOS arm64 und macOS x86_64.
 Diese automatisierte Validierung ersetzt keine nativen GUI-/Audioprüfungen.
