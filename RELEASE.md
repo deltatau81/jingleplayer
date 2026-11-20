@@ -1,5 +1,47 @@
 # Release-Vorbereitung 1.1.0-rc1
 
+Linux-Frozen-Korrektur nach Run `44804714580`, Job `136526492613`:
+`pygame.pkgdata` importiert `pkg_resources` optional. Dessen Aufnahme aktiviert
+PyInstallers `pyi_rth_pkgres`, der schon vor dem Anwendungseinstieg
+`pkg_resources` lädt. Über `jaraco.text` folgt das vendorte `jaraco.context`.
+Unter Python < 3.12 benötigt dieses konkret `backports.tarfile` (statt des
+Standardbibliotheksmoduls); der gemeldete Frozen-Build enthält dessen öffentlichen
+`backports`-Importpfad nicht. Setuptools stellt vendorte Abhängigkeiten über eine
+zur Laufzeit ergänzte Suchpfadposition bereit; diese Import-/Aliasstruktur wird
+im fehlerhaften Bundle nicht vollständig abgebildet. Ohne den CI-Buildgraphen
+ist nicht abschließend geklärt, an welchem Analyseschritt der Alias verloren ging.
+Lokal untersucht: PyInstaller 6.16.0, setuptools 80.9.0, pygame 2.6.1;
+die exakte setuptools-Version des Linux-Runners wurde nicht separat verifiziert.
+
+Korrektur ausschließlich in `build_linux.sh`: `--exclude-module pkg_resources`.
+Die Anwendung verwendet keine pkg_resources-API; pygame 2.6.1 behandelt den
+Import ausdrücklich als optional und lädt Ressourcen sonst relativ zu `__file__`.
+Dieser vorhandene Fallback funktioniert für das entpackte onedir-Bundle.
+Somit wird der unnötige Runtime-Hook nicht mehr eingebunden und die fehlerhafte
+Importkette vor dem Start entfällt. Kein Hidden Import, kein `--collect-all`,
+keine Paketinstallation und keine Requirements-Änderung erforderlich.
+Windows/macOS, Anwendungslogik und `verify_frozen.py` bleiben unverändert.
+
+Regression: Der echte PyInstaller-Modulgraph bestätigt, dass der Ausschluss
+`pyi_rth_pkgres` verhindert. Ein zweiter Test führt die installierte
+pygame-Implementierung mit gesperrtem pkg_resources-Import aus und liest eine
+Ressource erfolgreich über den Fallback. Gezielte Buildtests: 7 bestanden;
+Bash-Syntax und `git diff --check` erfolgreich. Die lokale pygame-Warnung zu
+`pkg_resources` stammt aus der normalen, nicht ausgeschlossenen Testumgebung.
+
+Offen bleibt die native Linux-Bestätigung: nach manuellem Commit/Push den
+[Release-Workflow](https://github.com/deltatau81/jingleplayer/actions/workflows/release-build.yml)
+auf `feature/macos-support` neu starten. Er muss unverändert Build,
+`python verify_frozen.py` und Archivierung erfolgreich durchlaufen.
+Ein erneuter Lauf des alten Commits enthält diese Korrektur nicht.
+Hier wurde kein Workflow gestartet: uncommittierte lokale Korrektur,
+kein automatischer Push erlaubt und vorhandene gh-Anmeldung ungültig.
+Bei künftig zusätzlich eingeführten Abhängigkeiten mit zwingender
+pkg_resources-Nutzung muss der Linux-Ausschluss erneut bewertet werden.
+
+Quellen: [pygame 2.6.1 pkgdata-Fallback](https://github.com/pygame/pygame/blob/2.6.1/src_py/pkgdata.py),
+[PyInstaller 6.16.0 pkg_resources-Runtime-Hook](https://github.com/pyinstaller/pyinstaller/blob/v6.16.0/PyInstaller/hooks/rthooks/pyi_rth_pkgres.py).
+
 Linux-Pfadkorrektur nach Release-Workflow `44801607888`: Relative Quellpfade
 bei `--add-data` wurden in die generierte Spec übernommen und von PyInstaller
 gegen `build/linux/spec/` aufgelöst. Dadurch fehlte dort `HELP.md`; derselbe
